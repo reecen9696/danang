@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Ace Defense</title>
+  <meta name="description" content="Voxel FPS wave-survival — dig, build and defend your fort against escalating waves." />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <!-- HUD                                                                 -->
+  <!-- ------------------------------------------------------------------ -->
+  <div id="hud">
+    <!-- Four quadrants of the original Sight.png, spread by the weapon cone. -->
+    <div id="crosshair">
+      <span class="q q0"></span>
+      <span class="q q1"></span>
+      <span class="q q2"></span>
+      <span class="q q3"></span>
+      <span class="dot"></span>
+    </div>
+
+    <div id="hitmarker"></div>
+    <div id="popups"></div>
+    <div id="damage-flash">
+      <span class="edge top"></span>
+      <span class="edge bottom"></span>
+    </div>
+    <div id="low-hp"></div>
+    <div id="announce"></div>
+
+    <div id="prompt"></div>
+
+    <div id="vitals" class="panel">
+      <div class="stat-row"><span>HEALTH</span><b id="hp-text">100</b></div>
+      <div id="hp-bar"><div id="hp-fill" class="high"></div></div>
+      <div class="stat-row"><span>LIVES</span><b id="tickets">3</b></div>
+      <div class="stat-row"><span id="mat-label">DIRT</span><b id="block-count">50</b></div>
+    </div>
+
+    <div id="topright">
+      <div id="points">0</div>
+      <div id="points-label">POINTS</div>
+      <div id="minimap-wrap" class="panel">
+        <canvas id="minimap" width="150" height="150"></canvas>
+        <div id="compass">N</div>
+      </div>
+    </div>
+
+    <div id="ammo-box" class="panel">
+      <div id="class-chip">RIFLEMAN <span>TAB</span></div>
+      <div id="weapon-name">Pistol</div>
+      <div id="ammo-icons"></div>
+      <div id="ammo">8<span class="reserve"> / 96</span></div>
+      <div id="reload-hint"></div>
+    </div>
+
+    <div id="wave-box" class="panel">
+      <div id="wave-label">PREPARE</div>
+      <div id="wave-value">WAVE 1</div>
+      <div id="wave-bar"><div id="wave-bar-fill"></div></div>
+      <div id="wave-sub"></div>
+    </div>
+
+    <div id="blocks-box" class="panel">
+      <div id="mat-list"></div>
+    </div>
+
+    <div id="log" ><div id="log-lines"></div></div>
+
+    <div id="perf"></div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <!-- Shop                                                                -->
+  <!-- ------------------------------------------------------------------ -->
+  <div id="shop">
+    <div id="shop-inner">
+      <div id="shop-head">
+        <div id="shop-title">MERCHANT</div>
+        <div id="shop-points">0</div>
+      </div>
+      <div id="shop-hint">Click to buy &middot; ESC or E to leave</div>
+      <div id="shop-tabs"></div>
+      <div id="shop-grid"></div>
+      <div id="shop-close">Shops are only open during the PREP phase.</div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <!-- Class picker                                                        -->
+  <!-- ------------------------------------------------------------------ -->
+  <div id="class-menu">
+    <div id="class-inner">
+      <div id="class-head">
+        <div id="class-title">CHOOSE YOUR CLASS</div>
+      </div>
+      <div id="class-hint">
+        Your class is your primary weapon &middot; the pistol, spade, blocks and
+        grenades come with all three
+      </div>
+      <div id="class-grid"></div>
+      <div id="class-close">TAB or ESC to close &mdash; the wave does not wait for you.</div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <!-- Overlays                                                            -->
+  <!-- ------------------------------------------------------------------ -->
+  <div id="loading" class="overlay">
+    <h1>ACE DEFENSE</h1>
+    <h2>BUILDING THE WORLD</h2>
+    <div id="loading-bar"><div id="loading-fill"></div></div>
+    <p id="loading-text">Generating terrain&hellip;</p>
+  </div>
+
+  <div id="start" class="overlay hidden">
+    <h1>ACE DEFENSE</h1>
+    <h2>DIG. BUILD. HOLD THE LINE.</h2>
+    <p>
+      Waves of armed bots advance on your fort. Their bullets and rockets
+      permanently destroy your walls, and the damage carries over between
+      rounds. Earn points from every hit and every kill, then spend them at the
+      merchants in town during the prep phase.
+    </p>
+    <div id="controls-grid">
+      <b>W A S D</b><span>Move</span>
+      <b>Mouse</b><span>Look &middot; Left fire &middot; Right aim / pick colour</span>
+      <b>Space / Ctrl / Shift</b><span>Jump &middot; Crouch &middot; Sprint</span>
+      <b>V</b><span>Sneak (silent)</span>
+      <b>1 2 3 4</b><span>Spade &middot; Blocks &middot; Gun &middot; Grenade</span>
+      <b>Tab</b><span>Change class (rifle / SMG / shotgun)</span>
+      <b>R</b><span>Reload</span>
+      <b>E</b><span>Interact / open merchant / ready up</span>
+      <b>Q / Scroll</b><span>Cycle block material</span>
+      <b>Arrows</b><span>Cycle block colour</span>
+      <b>F3</b><span>Performance overlay</span>
+      <b>ESC</b><span>Pause</span>
+    </div>
+    <div class="cta" id="start-btn">START RUN</div>
+  </div>
+
+  <div id="pause" class="overlay hidden">
+    <h1>PAUSED</h1>
+    <div id="pause-stats"></div>
+    <div class="cta" id="resume-btn">RESUME</div>
+    <p>Click the button or press ESC to get back in.</p>
+  </div>
+
+  <div id="gameover" class="overlay hidden">
+    <h1 id="go-title">RUN OVER</h1>
+    <h2 id="go-sub"></h2>
+    <div id="stats-grid"></div>
+    <div class="cta" id="restart-btn">NEW RUN</div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

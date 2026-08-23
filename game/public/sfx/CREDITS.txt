@@ -1,0 +1,31 @@
+Gun audio: "Snake's Authentic Gun Sounds 2" by Snakepit Studios.
+
+The files here are derived from that pack: leading silence trimmed so a shot
+fires the instant you click, a 3 ms fade-in to kill the resulting click, and
+re-encoded to 160 kbps MP3. Levels are untouched, so the relative loudness of
+each calibre is the recordings' own. Regenerate with tools/prep-sfx.sh.
+
+Weapon mapping (see src/audio/Audio.ts):
+  Pistol    .22LR single, pitched down slightly
+  SMG       5.56 single
+  Rifle     7.62x54R single (Mosin)
+  Shotgun   7.62x39 single, pitched down with a synthesised sub
+  Launcher  7.62x54R, pitched well down with a synthesised sub
+  Explosion 7.62x54R pitched far down, layered over the synthesised boom
+
+Enemy voices: two Vietnamese takes (voice-a, voice-b), sliced at playback from
+the offset table in src/audio/voiceLines.ts. Regenerate with tools/prep-voice.sh.
+
+Death cries: death-cry-a, death-cry-b — two takes played at random when a bot
+is killed, loudness-matched to the voice takes and trimmed head and tail so the
+cry lands on the frame the man drops. Regenerate with tools/prep-death.sh.
+
+Jungle ambience: "Tropical Jungle Birds" by placidplace (Pixabay, 108380).
+
+ambience-jungle is a 60 s seamless loop cut from the ten-minute original: the
+four seconds that follow the loop body are crossfaded back over its head, so
+the end of the loop runs into audio that genuinely followed it in the
+recording. Highpassed at 110 Hz to clear the field rumble, normalised to
+-26 LUFS so it sits far under the gunfire, stereo at 96 kbps. It is decoded and
+looped in the audio graph rather than streamed from an <audio> element, because
+element looping is not gapless. Regenerate with tools/prep-ambience.sh.

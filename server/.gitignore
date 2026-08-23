@@ -1,0 +1,7 @@
+node_modules
+build
+*.log
+
+# Contains the Colyseus Cloud deploy token. Never commit this.
+.colyseus-cloud.json
+.env

@@ -1,0 +1,12 @@
+node_modules
+dist
+build
+.DS_Store
+*.log
+
+# Colyseus Cloud deploy token
+.colyseus-cloud.json
+.env
+
+# Reference checkout — a full clone of OpenSpades, not our code
+reference/

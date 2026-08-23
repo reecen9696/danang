@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFX Lab — death cry</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c2027; --line: #2c323c; --ink: #d8dee7;
+    --dim: #7d8794; --hot: #d98b4a; --good: #6fae7a;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-size: 13px; }
+  header { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap; }
+  h1 { font-size: 14px; margin: 0; letter-spacing: .08em; text-transform: uppercase; }
+  header p { margin: 0; color: var(--dim); }
+  main { display: grid; grid-template-columns: minmax(340px, 420px) 1fr; gap: 18px; padding: 18px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px; }
+  .card + .card { margin-top: 14px; }
+  h2 { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+  canvas { display: block; width: 100%; border-radius: 4px; background: #0e1013; touch-action: none; }
+  #arena { cursor: grab; } #arena.drag { cursor: grabbing; }
+  .row { display: grid; grid-template-columns: 132px 1fr 62px; gap: 8px; align-items: center; padding: 3px 0; }
+  .row label { color: var(--dim); }
+  .row output { text-align: right; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--hot); }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  button, select { background: #262c35; color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+    padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover, select:hover { border-color: var(--hot); }
+  button.primary { background: var(--hot); color: #14161a; border-color: var(--hot); font-weight: 600; }
+  .readout { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 14px; }
+  .readout div { display: flex; justify-content: space-between; border-bottom: 1px dotted var(--line); padding-bottom: 3px; }
+  .readout span:first-child { color: var(--dim); }
+  .readout b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  pre { background: #0e1013; border: 1px solid var(--line); border-radius: 4px; padding: 10px;
+    overflow-x: auto; color: var(--good); margin: 0; font-size: 12px; line-height: 1.5; }
+  .note { color: var(--dim); margin: 10px 0 0; line-height: 1.5; }
+  kbd { background: #262c35; border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SFX Lab</h1>
+  <p>Drag the man. <kbd>space</kbd> plays · <kbd>r</kbd> raw file, no processing · same chain as <b>src/audio/Audio.ts</b></p>
+</header>
+
+<main>
+  <div>
+    <div class="card">
+      <h2>Distance</h2>
+      <canvas id="arena" width="760" height="760"></canvas>
+      <div class="btns">
+        <button class="primary" id="play">Play cry</button>
+        <button id="raw">Raw file</button>
+        <select id="take">
+          <option value="-1">random take</option>
+          <option value="0">death-cry-a</option>
+          <option value="1">death-cry-b</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>At this distance</h2>
+      <div class="readout">
+        <div><span>distance</span><b id="rDist">0</b></div>
+        <div><span>level</span><b id="rLevel">0</b></div>
+        <div><span>lowpass</span><b id="rLow">0</b></div>
+        <div><span>highpass</span><b id="rHigh">0</b></div>
+        <div><span>arrives</span><b id="rDelay">0</b></div>
+        <div><span>audible</span><b id="rAud">yes</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Waveform — where the echo lives</h2>
+      <canvas id="wave" width="760" height="200"></canvas>
+      <p class="note">Orange line is the tail cut. The smooth slope at the end of take A is
+        room reverb printed into the recording; no engine setting removes it, only cutting it does.</p>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Falloff — how fast it goes quiet</h2>
+      <div id="gFall"></div>
+    </div>
+    <div class="card">
+      <h2>Air — how fast it goes dull</h2>
+      <div id="gAir"></div>
+    </div>
+    <div class="card">
+      <h2>Tail — killing the recorded echo</h2>
+      <div id="gTail"></div>
+      <p class="note">tail cuts the sample short with a fade. decay rides an extra ramp down across
+        the whole sample, which buries a reverb tail while leaving the attack alone.</p>
+    </div>
+    <div class="card">
+      <h2>Source &amp; output</h2>
+      <div id="gOut"></div>
+    </div>
+    <div class="card">
+      <h2>Paste into Audio.ts</h2>
+      <pre id="snippet"></pre>
+      <div class="btns"><button id="copy">Copy</button><button id="reset">Reset to current</button></div>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+// Defaults are exactly what src/audio/Audio.ts is set to right now.
+const DEFAULTS = {
+  gain: 1, pitch: 1, jitter: 0.05,
+  range: 90, bite: 2,
+  muffle: 2400, airFloor: 420, floorAt: 0.6,
+  hpBase: 70, hpRate: 2.2, hpMax: 320,
+  tail: 0, tailFade: 0.12, decay: 0,
+  speed: 340, delayCap: 0.45,
+  master: 0.5, limiter: 1,
+};
+const P = { ...DEFAULTS };
+
+const GROUPS = {
+  gFall: [
+    ['range', 10, 200, 1, 'range (blocks)'],
+    ['bite', 0.5, 4, 0.1, 'bite'],
+    ['gain', 0, 2, 0.05, 'gain'],
+  ],
+  gAir: [
+    ['muffle', 200, 12000, 50, 'ceiling (Hz)'],
+    ['airFloor', 100, 2000, 10, 'floor (Hz)'],
+    ['floorAt', 0.2, 1, 0.05, 'floor at × range'],
+    ['hpBase', 20, 400, 5, 'highpass at 0'],
+    ['hpRate', 0, 8, 0.1, 'highpass / block'],
+    ['hpMax', 80, 800, 10, 'highpass max'],
+  ],
+  gTail: [
+    ['tail', 0, 3, 0.05, 'tail cut (s)'],
+    ['tailFade', 0.01, 0.6, 0.01, 'cut fade (s)'],
+    ['decay', 0, 40, 1, 'decay (dB)'],
+  ],
+  gOut: [
+    ['pitch', 0.7, 1.3, 0.01, 'pitch'],
+    ['jitter', 0, 0.2, 0.01, 'pitch jitter'],
+    ['speed', 100, 1000, 10, 'speed of sound'],
+    ['delayCap', 0, 1, 0.01, 'delay cap (s)'],
+    ['master', 0, 1, 0.05, 'master volume'],
+  ],
+};
+
+const outs = {};
+for (const [id, rows] of Object.entries(GROUPS)) {
+  const host = document.getElementById(id);
+  for (const [key, min, max, step, label] of rows) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label for="s_${key}">${label}</label>
+      <input type="range" id="s_${key}" min="${min}" max="${max}" step="${step}" value="${P[key]}">
+      <output id="o_${key}"></output>`;
+    host.append(row);
+    const input = row.querySelector('input');
+    outs[key] = row.querySelector('output');
+    input.addEventListener('input', () => { P[key] = +input.value; refresh(); });
+  }
+}
+
+// --- the chain, node for node the same as playSample() ----------------------
+let ctx = null, bus = null, master = null;
+const buffers = [];
+
+function boot() {
+  if (ctx) return;
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  master = ctx.createGain();
+  master.gain.value = P.master;
+  master.connect(ctx.destination);
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6; limiter.knee.value = 6; limiter.ratio.value = 12;
+  limiter.attack.value = 0.003; limiter.release.value = 0.25;
+  limiter.connect(master);
+  bus = limiter;
+  load();
+}
+
+async function load() {
+  for (const [i, name] of ['death-cry-a', 'death-cry-b'].entries()) {
+    const res = await fetch(`./sfx/${name}.mp3`);
+    buffers[i] = await ctx.decodeAudioData(await res.arrayBuffer());
+  }
+  drawWave();
+}
+
+const levelAt = (d) => d >= P.range ? 0 : (1 - d / P.range) ** P.bite / (1 + d * d * 0.0012 * P.bite);
+const soak = () => (P.muffle / P.airFloor - 1) / (P.range * P.floorAt);
+const lowAt = (d) => Math.max(P.airFloor, P.muffle / (1 + d * soak()));
+const highAt = (d) => Math.min(P.hpMax, P.hpBase + d * P.hpRate);
+const delayAt = (d) => Math.min(d / P.speed, P.delayCap);
+
+function pick() {
+  const sel = +document.getElementById('take').value;
+  return sel < 0 ? Math.floor(Math.random() * 2) : sel;
+}
+
+function fire(bypass = false) {
+  boot();
+  if (ctx.state === 'suspended') ctx.resume();
+  const buffer = buffers[pick()];
+  if (!buffer) return;
+  const d = dist;
+
+  const rate = bypass ? 1 : P.pitch * (1 + (Math.random() * 2 - 1) * P.jitter);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.playbackRate.value = rate;
+
+  if (bypass) { src.connect(ctx.destination); src.start(); return; }
+
+  const t = ctx.currentTime + delayAt(d);
+  const peak = P.gain * levelAt(d);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(peak, t);
+
+  const high = ctx.createBiquadFilter();
+  high.type = 'highpass'; high.Q.value = 0.7; high.frequency.value = highAt(d);
+  const low = ctx.createBiquadFilter();
+  low.type = 'lowpass'; low.Q.value = 0.7; low.frequency.value = lowAt(d);
+  src.connect(high).connect(low).connect(gain).connect(bus);
+
+  let duration = buffer.duration / rate;
+  // decay: an extra ramp down across the whole sample, to bury a printed tail.
+  if (P.decay > 0) {
+    gain.gain.exponentialRampToValueAtTime(Math.max(1e-4, peak * 10 ** (-P.decay / 20)), t + duration);
+  }
+  // tail: the engine's own cut — hold, then fade to nothing.
+  if (P.tail > 0 && P.tail < duration) {
+    gain.gain.setValueAtTime(gain.gain.value, t + Math.max(0, P.tail - P.tailFade));
+    gain.gain.linearRampToValueAtTime(0.0001, t + P.tail);
+    duration = P.tail;
+  }
+  src.start(t);
+  src.stop(t + duration + 0.02);
+}
+
+// --- arena ------------------------------------------------------------------
+const arena = document.getElementById('arena');
+const actx = arena.getContext('2d');
+const SCALE = 0.55;             // blocks per canvas pixel at this size
+let man = { x: 18, y: -12 };    // in blocks, relative to the listener
+let dist = Math.hypot(man.x, man.y);
+
+function drawArena() {
+  const w = arena.width, h = arena.height, cx = w / 2, cy = h / 2;
+  const px = (b) => b / SCALE;
+  actx.clearRect(0, 0, w, h);
+  actx.fillStyle = '#0e1013'; actx.fillRect(0, 0, w, h);
+
+  for (let r = 20; r <= 220; r += 20) {
+    const inRange = r <= P.range;
+    actx.beginPath(); actx.arc(cx, cy, px(r), 0, Math.PI * 2);
+    actx.strokeStyle = inRange ? '#2c323c' : '#22262d';
+    actx.lineWidth = r % 100 === 0 ? 3 : 1.5;
+    actx.stroke();
+    if (r % 40 === 0) {
+      actx.fillStyle = '#555d68'; actx.font = '20px ui-monospace, monospace';
+      actx.fillText(String(r), cx + 6, cy - px(r) - 6);
+    }
+  }
+  // the edge of earshot
+  actx.beginPath(); actx.arc(cx, cy, px(P.range), 0, Math.PI * 2);
+  actx.strokeStyle = '#d98b4a66'; actx.lineWidth = 3; actx.setLineDash([10, 8]);
+  actx.stroke(); actx.setLineDash([]);
+
+  actx.beginPath(); actx.moveTo(cx, cy); actx.lineTo(cx + px(man.x), cy + px(man.y));
+  actx.strokeStyle = '#3c4450'; actx.lineWidth = 3; actx.stroke();
+
+  actx.beginPath(); actx.arc(cx, cy, 11, 0, Math.PI * 2);
+  actx.fillStyle = '#6fae7a'; actx.fill();
+  actx.fillStyle = '#7d8794'; actx.font = '22px ui-monospace, monospace';
+  actx.fillText('you', cx + 18, cy + 8);
+
+  const mx = cx + px(man.x), my = cy + px(man.y);
+  const lvl = levelAt(dist);
+  actx.beginPath(); actx.arc(mx, my, 15, 0, Math.PI * 2);
+  actx.fillStyle = lvl > 0.008 ? '#d98b4a' : '#4a4f57'; actx.fill();
+  actx.fillStyle = '#d8dee7'; actx.font = '24px ui-monospace, monospace';
+  const label = `${dist.toFixed(0)} blocks`;
+  const lw = actx.measureText(label).width;
+  actx.fillText(label, Math.min(mx + 24, w - lw - 8), Math.max(20, Math.min(my + 9, h - 10)));
+}
+
+let dragging = false;
+const toBlocks = (e) => {
+  const r = arena.getBoundingClientRect();
+  const s = arena.width / r.width;
+  return {
+    x: ((e.clientX - r.left) * s - arena.width / 2) * SCALE,
+    y: ((e.clientY - r.top) * s - arena.height / 2) * SCALE,
+  };
+};
+arena.addEventListener('pointerdown', (e) => {
+  dragging = true; arena.classList.add('drag'); arena.setPointerCapture(e.pointerId);
+  man = toBlocks(e); refresh();
+});
+arena.addEventListener('pointermove', (e) => { if (dragging) { man = toBlocks(e); refresh(); } });
+arena.addEventListener('pointerup', () => { dragging = false; arena.classList.remove('drag'); fire(); });
+
+// --- waveform ---------------------------------------------------------------
+const wave = document.getElementById('wave');
+const wctx = wave.getContext('2d');
+function drawWave() {
+  const buf = buffers[Math.max(0, +document.getElementById('take').value)];
+  const w = wave.width, h = wave.height, mid = h / 2;
+  wctx.fillStyle = '#0e1013'; wctx.fillRect(0, 0, w, h);
+  if (!buf) return;
+  const data = buf.getChannelData(0), step = Math.ceil(data.length / w);
+  wctx.fillStyle = '#4a5764';
+  for (let x = 0; x < w; x++) {
+    let peak = 0;
+    for (let i = x * step; i < (x + 1) * step && i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
+    wctx.fillRect(x, mid - peak * mid, 1, peak * h);
+  }
+  if (P.tail > 0 && P.tail < buf.duration) {
+    const x = (P.tail / buf.duration) * w;
+    wctx.fillStyle = '#d98b4a'; wctx.fillRect(x, 0, 3, h);
+    wctx.fillStyle = '#d98b4a22'; wctx.fillRect(x, 0, w - x, h);
+  }
+  wctx.fillStyle = '#7d8794'; wctx.font = '18px ui-monospace, monospace';
+  wctx.fillText(`${buf.duration.toFixed(2)}s`, w - 90, 26);
+}
+document.getElementById('take').addEventListener('change', drawWave);
+
+// --- readouts ---------------------------------------------------------------
+function refresh() {
+  dist = Math.hypot(man.x, man.y);
+  for (const key of Object.keys(outs)) {
+    outs[key].textContent = P[key] >= 100 ? P[key].toFixed(0) : P[key].toFixed(2);
+  }
+  if (master) master.gain.value = P.master;
+  const lvl = levelAt(dist);
+  document.getElementById('rDist').textContent = `${dist.toFixed(0)} blk`;
+  document.getElementById('rLevel').textContent = `${(lvl * P.gain).toFixed(3)}`;
+  document.getElementById('rLow').textContent = `${lowAt(dist).toFixed(0)} Hz`;
+  document.getElementById('rHigh').textContent = `${highAt(dist).toFixed(0)} Hz`;
+  document.getElementById('rDelay').textContent = `${(delayAt(dist) * 1000).toFixed(0)} ms`;
+  const aud = document.getElementById('rAud');
+  aud.textContent = lvl < 0.008 ? 'CUT' : 'yes';
+  aud.style.color = lvl < 0.008 ? '#7d8794' : '#6fae7a';
+  drawArena(); drawWave(); snippet();
+}
+
+function snippet() {
+  const tail = P.tail > 0 ? `, tail: ${P.tail}` : '';
+  const decay = P.decay > 0 ? `, decay: ${P.decay}` : '';
+  document.getElementById('snippet').textContent =
+`// SAMPLES['death-cry']
+{ file: 'death-cry-a', alts: ['death-cry-b'], gain: ${P.gain},
+  jitter: ${P.jitter}, voices: 3, range: ${P.range},
+  muffle: ${P.muffle}${tail}${decay}, fallback: 'death' }
+
+const AIR_FLOOR = ${P.airFloor};
+const AIR_FLOOR_AT = ${P.floorAt};
+const RANGE_BITE = ${P.bite};
+// highpass: Math.min(${P.hpMax}, ${P.hpBase} + distance * ${P.hpRate})
+// delay cap: ${P.delayCap}s${decay ? '\n// decay is not in the engine yet — say the word and I will add it' : ''}`;
+}
+
+document.getElementById('play').addEventListener('click', () => fire());
+document.getElementById('raw').addEventListener('click', () => fire(true));
+document.getElementById('copy').addEventListener('click', () =>
+  navigator.clipboard.writeText(document.getElementById('snippet').textContent));
+document.getElementById('reset').addEventListener('click', () => {
+  Object.assign(P, DEFAULTS);
+  for (const key of Object.keys(outs)) document.getElementById(`s_${key}`).value = P[key];
+  refresh();
+});
+addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); fire(); }
+  if (e.key === 'r') fire(true);
+});
+// The context starts suspended until a gesture, but it still decodes, so the
+// waveform is on screen before anything is clicked.
+boot();
+refresh();
+</script>
+</body>
+</html>
