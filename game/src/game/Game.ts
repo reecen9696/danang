@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  RENDER, PHYS, VITALS, WORLD_X, WORLD_Y, WORLD_Z, WATER_LEVEL, Mat, MATERIALS,
+  RENDER, PHYS, WORLD_X, WORLD_Y, WORLD_Z, WATER_LEVEL, Mat, MATERIALS,
 } from '../core/constants';
 import { Input } from '../core/Input';
 import { BOTS } from '../ai/botTypes';
@@ -38,7 +38,7 @@ import { ParticleSystem } from '../fx/Particles';
 import { TracerSystem } from '../fx/Tracers';
 import { DecalSystem } from '../fx/Decals';
 import { BloodSystem } from '../fx/Blood';
-import { Economy, POINTS, ShopKind, ItemEffect, type ShopItem } from './Economy';
+import { Economy, POINTS, ShopKind, ItemEffect, stocks, type ShopItem } from './Economy';
 import {
   DeployableManager, DeployId, DEPLOYABLES, TURRET, occupies,
   type AmmoCrate, type DeployDef, type Turret,
@@ -731,6 +731,8 @@ export class Game {
     // reason -- the person who cries out should sound like the person who was
     // shot at, not like a stock panic sample.
     this.townsfolk = new Townsfolk(merchantDefs.length + 10, {
+      // They live among the huts, so they have to walk round them.
+      world: this.world,
       onScream: (x, y, z, child) => this.audio.play(
         child ? 'scream-child' : 'scream-woman',
         this.distanceToPlayer(x, y, z),
@@ -778,6 +780,7 @@ export class Game {
     this.ox = new Ox({
       x: town.x - 18, y: town.y, z: town.z + 3,
       pasture: { x0: town.x - 23, z0: town.z - 6, x1: town.x - 13, z1: town.z + 6 },
+      world: this.world,
     });
     this.scene.add(this.ox.mesh);
 
@@ -855,31 +858,6 @@ export class Game {
     this.shop.isAvailable = (item) => {
       if (item.effect === ItemEffect.Scope) return this.loadout.hasWeapon(WeaponId.Rifle);
       return true;
-    };
-    this.shop.ownedLabel = (item) => {
-      if (item.effect === ItemEffect.GiveBlocks && item.material !== undefined) {
-        return `You have ${this.loadout.blocks[item.material]}`;
-      }
-      if (item.effect === ItemEffect.GiveDeployable && item.deployable !== undefined) {
-        const carried = this.loadout.deployStock(item.deployable);
-        const out = this.deployables.countOf(item.deployable);
-        const cap = DEPLOYABLES[item.deployable].maxPlaced;
-        return out > 0 && cap !== Infinity
-          ? `Carrying ${carried} · ${out}/${cap} deployed`
-          : `Carrying ${carried}`;
-      }
-      if (item.effect === ItemEffect.TurretAmmo) {
-        return `${this.deployables.turrets.length} sentries out`;
-      }
-      if (item.effect === ItemEffect.RefillAmmo || item.effect === ItemEffect.AmmoBox) {
-        const w = this.loadout.gun;
-        return `${w.def.name} reserve ${w.stock}/${w.capacity}`;
-      }
-      if (item.effect === ItemEffect.Toughness) {
-        const extra = Math.round(this.player.maxHp - VITALS.pool);
-        return extra > 0 ? `+${extra}% tougher than issue` : 'Standard issue';
-      }
-      return null;
     };
   }
 
@@ -1009,6 +987,7 @@ export class Game {
     this.loadout.clearDeployables();
     this.farmers?.respawn();
     this.townsfolk?.respawn();
+    this.ox?.respawn();
     this.player.maxHp = 100;
     this.player.respawn(this.layout.playerSpawn.x, this.layout.playerSpawn.y + 1, this.layout.playerSpawn.z);
     this.player.yaw = Math.PI * 0.75;
@@ -1794,11 +1773,28 @@ export class Game {
       if (!hitBot) {
         const field = this.farmers?.raycast(ox, oy, oz, dx, dy, dz, voxDist) ?? null;
         const street = this.townsfolk?.raycast(ox, oy, oz, dx, dy, dz, voxDist) ?? null;
-        // Whichever of the two is nearer takes it, so a villager standing
-        // behind a farmer is covered by them the way you would expect.
-        const inField = field !== null && (street === null || field.distance <= street.distance);
-        const hit = inField ? field! : street;
-        if (hit) {
+        // The buffalo is swept with them. It is the biggest thing standing in
+        // the village and it stands in the open, so a round going down the
+        // street finds it exactly as often as it looks like it should.
+        const beast = this.ox?.raycast(ox, oy, oz, dx, dy, dz, voxDist) ?? null;
+
+        // Whichever is nearest takes it, so a villager standing behind a
+        // farmer is covered by them the way you would expect.
+        let nearest = Infinity;
+        if (field !== null) nearest = Math.min(nearest, field.distance);
+        if (street !== null) nearest = Math.min(nearest, street.distance);
+        if (beast !== null) nearest = Math.min(nearest, beast.distance);
+
+        if (beast !== null && beast.distance === nearest) {
+          endX = ox + dx * beast.distance;
+          endY = oy + dy * beast.distance;
+          endZ = oz + dz * beast.distance;
+          const dmg = Math.round(damage[HitZone.Torso] * damageMultiplier);
+          this.oxShot(this.ox!.hit(dmg, ox, oz), endX, endY, endZ, dx, dz);
+          hitCivilian = true;
+        } else if (field !== null || street !== null) {
+          const inField = field !== null && field.distance === nearest;
+          const hit = inField ? field! : street!;
           endX = ox + dx * hit.distance;
           endY = oy + dy * hit.distance;
           endZ = oz + dz * hit.distance;
@@ -1818,6 +1814,10 @@ export class Game {
     if (!hostile) {
       const scared = (this.farmers?.alarm(endX, endZ, 26) ?? 0)
         + (this.townsfolk?.alarm(endX, endZ, 26) ?? 0);
+      // The buffalo goes with them. It is not offended, but it is startled,
+      // and a bolting animal is the loudest thing the village has to say about
+      // rounds going through it.
+      this.ox?.alarm(endX, endZ, 26);
       if (scared > 0) this.onRageCrossed(this.aggression.civiliansScared());
     }
 
@@ -1930,6 +1930,44 @@ export class Game {
    * the game's only comment on it is that the place empties and stays empty
    * until the next morning.
    */
+  /**
+   * A round into the buffalo.
+   *
+   * Same treatment as a person -- blood on the grass, a pool under the body --
+   * because that is what it is, and dressing it up as anything softer would be
+   * dishonest about what the player just did. The valley notices.
+   */
+  private oxShot(
+    killed: boolean,
+    x: number, y: number, z: number,
+    dirX: number, dirZ: number,
+  ): void {
+    for (let i = 0; i < (killed ? 26 : 10); i++) {
+      this.particles.spawn(
+        x, y, z,
+        dirX * 5 + (Math.random() - 0.5) * 7,
+        Math.random() * 4,
+        dirZ * 5 + (Math.random() - 0.5) * 7,
+        0.5, 0.05, 0.05, 0.95, 0.7 + Math.random() * 0.7, 0.45 + Math.random() * 0.4,
+        24, 0.9, true,
+      );
+    }
+    this.blood.spatter(x, y, z, killed ? 4 : 2, killed ? 1.8 : 1.1);
+
+    if (!killed) {
+      this.audio.play('hit', this.distanceToPlayer(x, y, z));
+      return;
+    }
+
+    const b = this.ox!;
+    this.blood.pool(b.bodyX, b.bodyY + 0.05, b.bodyZ, 2.4 + Math.random() * 0.6, CORPSE_LIFE + 30);
+    this.hud.log('You shot the village buffalo', 'bad');
+    this.onRageCrossed(this.aggression.livestockKilled());
+    // Somebody saw it go down, and somebody is already walking to tell
+    // the men in the ground about it.
+    this.hunterTimer = Math.min(this.hunterTimer, 14);
+  }
+
   private civilianShot(
     killed: boolean, s: number,
     x: number, y: number, z: number,
@@ -2116,6 +2154,18 @@ export class Game {
       ...(this.farmers?.blast(x, y, z, r, dmg) ?? []),
       ...(this.townsfolk?.blast(x, y, z, r, dmg) ?? []),
     ];
+    // A shell in the village does not pick its way round the livestock. This
+    // is reported on its own line rather than folded into the body count,
+    // because it is a different thing to have done.
+    if (this.ox?.blast(x, y, z, r, dmg) && !hostile) {
+      const b = this.ox;
+      this.blood.pool(b.bodyX, b.bodyY + 0.05, b.bodyZ, 2.4 + Math.random() * 0.6, CORPSE_LIFE + 30);
+      this.hud.log('The village buffalo is dead', 'bad');
+      this.onRageCrossed(this.aggression.livestockKilled());
+      this.hunterTimer = Math.min(this.hunterTimer, 14);
+    } else {
+      this.ox?.alarm(x, z, r * 2.5);
+    }
     for (const person of caught) {
       this.blood.pool(
         person.x, person.y + 0.2, person.z,
@@ -2489,7 +2539,6 @@ export class Game {
         break;
       case Phase.Combat:
         this.audio.play('wave');
-        if (this.shop.open) this.shop.close();
         break;
       case Phase.Cleared:
         this.audio.play('clear');
@@ -2614,11 +2663,7 @@ export class Game {
     }
 
     if (this.nearMerchant) {
-      if (this.waves.phase === Phase.Combat) {
-        this.hud.setPrompt(`${this.nearMerchant.name} — closed during combat`);
-      } else {
-        this.hud.setPrompt(`<kbd>E</kbd> ${this.nearMerchant.name}`);
-      }
+      this.hud.setPrompt(`<kbd>E</kbd> ${this.nearMerchant.name}`);
       return;
     }
 
@@ -2659,11 +2704,9 @@ export class Game {
     if (this.nearCrate) { this.useAmmoCrate(this.nearCrate); return; }
 
     if (this.nearMerchant) {
-      if (this.waves.phase === Phase.Combat) {
-        this.audio.play('deny');
-        this.hud.log('Merchants are closed during combat', 'warn');
-        return;
-      }
+      // The stalls never shut. Standing at a counter with your back to a raid
+      // is its own price -- the panel takes your mouse and the valley does not
+      // wait -- so the phase does not need to say no on your behalf.
       this.input.uiCapture = true;
       this.input.exitLock();
       this.shop.show(this.nearMerchant.kind, this.nearMerchant.name);
@@ -2871,6 +2914,14 @@ export class Game {
   }
 
   private buy(item: ShopItem): boolean {
+    // Whose counter you are stood at decides what you can walk away with. The
+    // panel only draws one merchant's stock, so this can only fire if the sale
+    // came from somewhere other than the card that was drawn -- and it is the
+    // buy, not the drawing, that hands over the goods.
+    if (!this.shop.open || !stocks(this.shop.kind, item)) {
+      this.audio.play('deny');
+      return false;
+    }
     if (!this.economy.canAfford(item)) {
       this.audio.play('deny');
       return false;

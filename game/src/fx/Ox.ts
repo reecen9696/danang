@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import type { VoxelWorld } from '../voxel/VoxelWorld';
+import { walkClear } from './walk';
 
 /**
  * The village buffalo.
@@ -16,8 +18,13 @@ import * as THREE from 'three';
  * thing on it that has no idea there is a war on should read that way from the
  * far end of the road.
  *
- * Scenery, like the flags and the farmers: no collision, no server state,
- * nothing to shoot. One InstancedMesh of boxes, one draw call.
+ * Scenery in the sense that the server knows nothing about it, but not in the
+ * sense that it is furniture: it can be shot, and shooting it is the worst
+ * thing you can do to this village short of shooting the people in it. A
+ * buffalo is a household's plough, its cart and its savings in one animal, and
+ * a valley that finds theirs dead in the grass takes it personally.
+ *
+ * One InstancedMesh of boxes, one draw call.
  */
 
 /** Boxes drawn. The pose builder must stay under this. */
@@ -31,6 +38,27 @@ const GRAZE_CREEP = 0.1;
 const STRIDE = 1.5;
 /** How fast it comes round onto a new heading. It is in no hurry. */
 const TURN_RATE = 1.1;
+/** Blocks/sec running from a bang. Heavy, and faster than you expect. */
+const BOLT_SPEED = 5.4;
+/** How long it keeps running once something has started it. */
+const BOLT_TIME = 4.5;
+/**
+ * What it takes to put one down.
+ *
+ * High on purpose. A buffalo is six hundred kilos and this should never be
+ * something that happens by accident to a round that went wide -- if the
+ * valley is going to hold it against you, you have to have meant it.
+ */
+const OX_HP = 320;
+/** Seconds to go over once it is dead. */
+const FALL_TIME = 1.1;
+
+/**
+ * Height it rolls about when it goes down: the middle of the barrel, so the
+ * body pivots onto its flank instead of pinwheeling off its hooves.
+ */
+const ROLL_PIVOT_Y = 1.05;
+
 /** How far the head drops to reach the grass. */
 const HEAD_DOWN = 0.92;
 
@@ -58,6 +86,13 @@ const enum Task {
   Walk = 1,
   /** Head up, chewing, looking at nothing in particular. */
   Chew = 2,
+  /**
+   * Something went off. A buffalo panics slowly and then all at once, and when
+   * it goes it goes in a straight line through whatever it was doing.
+   */
+  Bolt = 3,
+  /** Down in the grass. */
+  Dead = 4,
 }
 
 const enum Rig {
@@ -83,6 +118,10 @@ const yawQuat = new THREE.Quaternion();
 const partQuat = new THREE.Quaternion();
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
+const AXIS_Z = new THREE.Vector3(0, 0, 1);
+const rollQuat = new THREE.Quaternion();
+/** Reused so a step costs no allocation; the animal's own fields stay private. */
+const walkScratch = { x: 0, y: 0, z: 0 };
 
 function shortestAngle(from: number, to: number): number {
   let d = (to - from) % (Math.PI * 2);
@@ -101,11 +140,21 @@ export interface Pasture {
 
 export interface OxOptions {
   x: number;
-  /** Standing level -- the ground it walks on is flat, so this never changes. */
+  /** Standing level. Follows the ground once it starts moving. */
   y: number;
   z: number;
   pasture: Pasture;
   rand?: () => number;
+  /**
+   * The world it stands in, so it walks round the huts rather than through
+   * them. Optional so a test can raise one without a world.
+   */
+  world?: VoxelWorld;
+}
+
+/** Where a round found it, for the caller's blood and impact effects. */
+export interface OxHit {
+  distance: number;
 }
 
 export class Ox {
@@ -113,10 +162,23 @@ export class Ox {
 
   private readonly rand: () => number;
   private readonly pasture: Pasture;
+  private readonly world: VoxelWorld | null;
 
   private x: number;
-  private readonly y: number;
+  private y: number;
   private z: number;
+  /** Where it was raised, so a new run puts it back. */
+  private readonly homeX: number;
+  private readonly homeY: number;
+  private readonly homeZ: number;
+
+  private hp = OX_HP;
+  /** 0 standing, 1 lying on its side. */
+  private fall = 0;
+  /** Which side it goes over on. Fixed at birth so it never flips mid-fall. */
+  private fallSide = 1;
+  /** Whether it has found the ground under it yet. */
+  private grounded = false;
   private yaw: number;
   private desiredYaw: number;
 
@@ -133,9 +195,11 @@ export class Ox {
   constructor(opts: OxOptions) {
     this.rand = opts.rand ?? Math.random;
     this.pasture = opts.pasture;
-    this.x = opts.x;
-    this.y = opts.y;
-    this.z = opts.z;
+    this.world = opts.world ?? null;
+    this.x = this.homeX = opts.x;
+    this.y = this.homeY = opts.y;
+    this.z = this.homeZ = opts.z;
+    this.fallSide = this.rand() < 0.5 ? -1 : 1;
     this.yaw = this.desiredYaw = this.rand() * Math.PI * 2;
     this.clock = this.rand() * 100;
     this.timer = 4 + this.rand() * 10;
@@ -154,10 +218,31 @@ export class Ox {
     this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
   }
 
+  /** Still on its feet. */
+  get alive(): boolean {
+    return this.task !== Task.Dead;
+  }
+
   update(dt: number): void {
     const rand = this.rand;
     this.clock += dt;
     this.timer -= dt;
+
+    // Settle onto the actual ground the first time it runs. The caller passes
+    // the town's level, which is the right block to within a step but not
+    // necessarily the one under its hooves.
+    if (!this.grounded) {
+      this.grounded = true;
+      this.step(0, 0);
+    }
+
+    if (this.task === Task.Dead) {
+      this.fall = Math.min(1, this.fall + dt / FALL_TIME);
+      // The head goes with the body rather than staying in the grass.
+      this.headDown += (0.35 - this.headDown) * Math.min(1, dt * 2.5);
+      this.draw();
+      return;
+    }
 
     switch (this.task) {
       case Task.Walk: {
@@ -174,8 +259,8 @@ export class Ox {
         // follows, which is most of what makes a big animal read as heavy.
         const facing = Math.max(0, Math.cos(shortestAngle(this.yaw, this.desiredYaw)));
         const move = Math.min(dist, WALK_SPEED * facing * dt);
-        this.x += (dx / dist) * move;
-        this.z += (dz / dist) * move;
+        // Walked into something: pick somewhere else rather than lean on it.
+        if (!this.step((dx / dist) * move, (dz / dist) * move)) this.timer = 0;
         this.walkPhase += move * STRIDE;
         this.headDown += (0.25 - this.headDown) * Math.min(1, dt * 1.5);
         break;
@@ -184,13 +269,28 @@ export class Ox {
       case Task.Graze: {
         // Creeping down a patch, a mouthful at a time.
         const move = GRAZE_CREEP * dt;
-        this.x += Math.sin(this.yaw) * move;
-        this.z += Math.cos(this.yaw) * move;
+        this.step(Math.sin(this.yaw) * move, Math.cos(this.yaw) * move);
         this.walkPhase += move * STRIDE;
         this.headDown += (1 - this.headDown) * Math.min(1, dt * 1.2);
         if (this.timer <= 0) {
           this.task = Task.Chew;
           this.timer = 5 + rand() * 9;
+        }
+        break;
+      }
+
+      case Task.Bolt: {
+        // Head up and straight on. It does not pick its way round anything at
+        // this speed; whatever it meets, it meets.
+        const move = BOLT_SPEED * dt;
+        const ran = this.step(Math.sin(this.yaw) * move, Math.cos(this.yaw) * move);
+        this.walkPhase += move * STRIDE;
+        this.headDown += (0 - this.headDown) * Math.min(1, dt * 6);
+        // Stopped by something, or run far enough: it stands and blows, then
+        // goes back to the only thing it knows how to do.
+        if (!ran || this.timer <= 0) {
+          this.task = Task.Chew;
+          this.timer = 6 + rand() * 8;
         }
         break;
       }
@@ -211,17 +311,183 @@ export class Ox {
       }
     }
 
-    // Stay on the grass it is allowed to be on.
-    const p = this.pasture;
-    if (this.task !== Task.Walk
-      && (this.x < p.x0 || this.x > p.x1 || this.z < p.z0 || this.z > p.z1)) {
-      this.beginWalk();
+    // Stay on the grass it is allowed to be on -- by walking back onto it,
+    // never by being snapped back onto it. Clamping the position was fine
+    // while nothing could stop the animal moving; now that a wall can, the
+    // clamp would be the one thing on the map still able to put it inside a
+    // hut. An animal running for its life is not consulting the fence either,
+    // so the pasture only steers it while it is calm.
+    if (this.task !== Task.Bolt) {
+      const p = this.pasture;
+      if (this.task !== Task.Walk
+        && (this.x < p.x0 || this.x > p.x1 || this.z < p.z0 || this.z > p.z1)) {
+        this.beginWalk();
+      }
     }
-    this.x = Math.min(p.x1, Math.max(p.x0, this.x));
-    this.z = Math.min(p.z1, Math.max(p.z0, this.z));
 
-    this.yaw += shortestAngle(this.yaw, this.desiredYaw) * Math.min(1, dt * TURN_RATE);
+    // Bolting, the head goes where the body is already going.
+    const turnRate = this.task === Task.Bolt ? TURN_RATE * 4 : TURN_RATE;
+    this.yaw += shortestAngle(this.yaw, this.desiredYaw) * Math.min(1, dt * turnRate);
     this.draw();
+  }
+
+  /**
+   * One step, through whatever is in the way. Returns whether it moved.
+   *
+   * With no world wired up it moves freely, which is what a bare `new Ox()` in
+   * a test wants.
+   */
+  private step(stepX: number, stepZ: number): boolean {
+    if (this.world === null) {
+      this.x += stepX;
+      this.z += stepZ;
+      return true;
+    }
+    walkScratch.x = this.x;
+    walkScratch.y = this.y;
+    walkScratch.z = this.z;
+    // Wide: this is a barrel on legs, and half of it going into a hut wall is
+    // as wrong as all of it.
+    const moved = walkClear(this.world, walkScratch, stepX, stepZ, 0.75);
+    this.x = walkScratch.x;
+    this.y = walkScratch.y;
+    this.z = walkScratch.z;
+    return moved;
+  }
+
+  /**
+   * Something banged near enough to start it.
+   *
+   * Returns whether this was the shot that actually moved it, so the caller
+   * can tell a fresh panic from one already in progress.
+   */
+  alarm(x: number, z: number, radius: number): boolean {
+    if (this.task === Task.Dead) return false;
+    const dx = this.x - x;
+    const dz = this.z - z;
+    if (dx * dx + dz * dz > radius * radius) return false;
+    const already = this.task === Task.Bolt;
+    this.bolt(x, z);
+    return !already;
+  }
+
+  /** Away from whatever made the noise, flat out. */
+  private bolt(fromX: number, fromZ: number): void {
+    const dx = this.x - fromX;
+    const dz = this.z - fromZ;
+    // Standing exactly where the bang was: any direction will do.
+    this.desiredYaw = (dx === 0 && dz === 0)
+      ? this.rand() * Math.PI * 2
+      : Math.atan2(dx, dz);
+    this.yaw = this.desiredYaw;
+    this.task = Task.Bolt;
+    this.timer = BOLT_TIME;
+    this.headDown = 0;
+  }
+
+  /**
+   * Ray against the standing animal, in its own frame.
+   *
+   * Tested un-yawed against a local box rather than as a circle: a buffalo is
+   * two and a half blocks long and one wide, and a round that goes past its
+   * nose should miss it the way it looks like it did.
+   */
+  raycast(
+    ox: number, oy: number, oz: number,
+    dx: number, dy: number, dz: number,
+    maxDist: number,
+  ): OxHit | null {
+    if (this.task === Task.Dead) return null;
+
+    // Into the animal's frame: translate to its feet, then turn the world the
+    // other way by its yaw.
+    const c = Math.cos(-this.yaw);
+    const sn = Math.sin(-this.yaw);
+    const rx = ox - this.x;
+    const rz = oz - this.z;
+    const lx = rx * c + rz * sn;
+    const lz = -rx * sn + rz * c;
+    const ly = oy - this.y;
+    const ldx = dx * c + dz * sn;
+    const ldz = -dx * sn + dz * c;
+
+    let t0 = 0;
+    let t1 = maxDist;
+    const slab = (o: number, d: number, lo: number, hi: number): boolean => {
+      if (Math.abs(d) < 1e-8) return o >= lo && o <= hi;
+      const inv = 1 / d;
+      let a = (lo - o) * inv;
+      let b = (hi - o) * inv;
+      if (a > b) { const t = a; a = b; b = t; }
+      if (a > t0) t0 = a;
+      if (b < t1) t1 = b;
+      return t0 <= t1;
+    };
+
+    // The body, not the horns. Missing a horn tip is not a hit anybody feels
+    // cheated by; being shot through them is.
+    if (!slab(lx, ldx, -0.62, 0.62)) return null;
+    if (!slab(ly, dy, 0, 2.4)) return null;
+    if (!slab(lz, ldz, -1.8, 2.9)) return null;
+    if (t0 < 0 || t0 >= maxDist) return null;
+    return { distance: t0 };
+  }
+
+  /**
+   * A round into it. Returns whether that was the one that killed it.
+   *
+   * A wounded buffalo runs, which is the tell that you have done something to
+   * it rather than missed: the animal that has stood in the same patch of
+   * grass all game is suddenly going the other way.
+   */
+  hit(damage: number, fromX: number, fromZ: number): boolean {
+    if (this.task === Task.Dead) return false;
+    this.hp -= damage;
+    if (this.hp > 0) {
+      this.bolt(fromX, fromZ);
+      return false;
+    }
+    this.kill();
+    return true;
+  }
+
+  /**
+   * A blast near it. Returns whether it died of it.
+   *
+   * Falls off with distance the way the people in the street do, so a shell in
+   * the market is what kills it and one over the wire is what starts it.
+   */
+  blast(x: number, y: number, z: number, radius: number, damage: number): boolean {
+    if (this.task === Task.Dead) return false;
+    const dist = Math.hypot(this.x - x, this.y + 1.4 - y, this.z - z);
+    if (dist > radius) return false;
+    const falloff = 1 - dist / radius;
+    return this.hit(damage * falloff, x, z);
+  }
+
+  private kill(): void {
+    this.hp = 0;
+    this.task = Task.Dead;
+    this.fall = 0;
+    this.walkPhase = 0;
+  }
+
+  /** Where to put the blood and the carcass, at the middle of the barrel. */
+  get bodyX(): number { return this.x; }
+  get bodyY(): number { return this.y; }
+  get bodyZ(): number { return this.z; }
+
+  /** Back on its feet for a new run. */
+  respawn(): void {
+    this.x = this.homeX;
+    this.y = this.homeY;
+    this.z = this.homeZ;
+    this.hp = OX_HP;
+    this.fall = 0;
+    this.headDown = 1;
+    this.task = Task.Graze;
+    this.timer = 4 + this.rand() * 10;
+    this.grounded = false;
   }
 
   private beginWalk(): void {
@@ -235,17 +501,24 @@ export class Ox {
 
   private draw(): void {
     const colorAttr = this.mesh.instanceColor!;
-    const walking = this.task === Task.Walk;
+    const dead = this.task === Task.Dead;
+    const bolting = this.task === Task.Bolt;
+    const walking = this.task === Task.Walk || bolting;
     const down = this.headDown;
 
-    // Diagonal pairs, the way a walking quadruped actually goes.
-    const swingA = walking ? Math.sin(this.walkPhase) * 0.45 : 0;
-    const swingB = walking ? Math.sin(this.walkPhase + Math.PI) * 0.45 : 0;
+    // Diagonal pairs, the way a walking quadruped actually goes. A gallop is
+    // the same cycle run hard: longer in the leg and faster over the ground.
+    const gait = bolting ? 0.85 : 0.45;
+    const swingA = walking ? Math.sin(this.walkPhase) * gait : 0;
+    const swingB = walking ? Math.sin(this.walkPhase + Math.PI) * gait : 0;
     // Breathing, and the shoulders rolling over each step.
     const bob = (walking ? Math.abs(Math.sin(this.walkPhase)) * 0.05 : 0)
       + Math.sin(this.clock * 0.9) * 0.02;
-    // The tail never stops. It is the only part of a resting buffalo that moves.
-    const tail = Math.sin(this.clock * 1.9) * 0.34 + Math.sin(this.clock * 0.7) * 0.12;
+    // The tail never stops -- it is the only part of a resting buffalo that
+    // moves -- right up until it does.
+    const tail = dead
+      ? 0
+      : Math.sin(this.clock * 1.9) * 0.34 + Math.sin(this.clock * 0.7) * 0.12;
     // Chewing: the jaw works while the head is up.
     const chew = this.task === Task.Chew ? Math.sin(this.clock * 4.5) * 0.05 : 0;
 
@@ -298,6 +571,16 @@ export class Ox {
     ];
 
     yawQuat.setFromAxisAngle(AXIS_Y, this.yaw);
+    // Going over sideways: the whole animal rolls about its own spine, which
+    // for this rig is the local Z axis, pivoting at the height of the barrel
+    // so it lands on its flank rather than swinging off its feet.
+    const roll = this.fall * (Math.PI / 2) * this.fallSide;
+    const rollC = Math.cos(roll);
+    const rollS = Math.sin(roll);
+    if (roll !== 0) {
+      rollQuat.setFromAxisAngle(AXIS_Z, roll);
+      yawQuat.multiply(rollQuat);
+    }
     const headPitch = down * HEAD_DOWN;
     const headC = Math.cos(headPitch);
     const headS = Math.sin(headPitch);
@@ -306,7 +589,7 @@ export class Ox {
     for (let i = 0; i < parts.length && n < PARTS; i++) {
       const [ox, oy, oz, sx, sy, sz, col, rig] = parts[i];
 
-      let ly = oy;
+      let ly: number = oy;
       let lz = oz;
       let pitch = 0;
 
@@ -359,7 +642,17 @@ export class Ox {
         q = yawQuat;
       }
 
-      tmpPos.set(ox, ly, lz).applyQuaternion(yawQuat);
+      // The roll happens in the animal's own frame, before the yaw that puts
+      // it in the world, so a body lying down keeps pointing the way it was
+      // facing when it went.
+      let lx = ox;
+      if (roll !== 0) {
+        const ry = ly - ROLL_PIVOT_Y;
+        lx = ox * rollC - ry * rollS;
+        ly = ROLL_PIVOT_Y + ox * rollS + ry * rollC;
+      }
+
+      tmpPos.set(lx, ly, lz).applyQuaternion(yawQuat);
       tmpPos.x += this.x;
       tmpPos.y += this.y;
       tmpPos.z += this.z;

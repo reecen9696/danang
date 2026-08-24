@@ -1,24 +1,22 @@
-import { Economy, ShopKind, itemsFor, type ShopItem } from '../game/Economy';
+import { Economy, ShopKind, itemsFor, stocks, type ShopItem } from '../game/Economy';
+import { itemIconSvg } from './itemIcons';
 import { money } from './format';
-
-const TABS: { kind: ShopKind; label: string }[] = [
-  { kind: ShopKind.Weapons, label: 'WEAPONS' },
-  { kind: ShopKind.Materials, label: 'MATERIALS' },
-  { kind: ShopKind.Defense, label: 'DEFENSES' },
-  { kind: ShopKind.Utility, label: 'UTILITY' },
-];
 
 /**
  * Merchant overlay.
  *
- * The player physically walks to a stall and presses E; the panel is only ever
- * open during the prep phase, so nothing here runs while the game is hot.
+ * The player walks to a stall and presses E. There are no tabs: a merchant
+ * sells what a merchant stocks, so the panel only ever shows `itemsFor` their
+ * own trade -- browsing the armourer's sandbags from the weapon stall was the
+ * shop pretending to be four shops.
+ *
+ * A card is a picture, a name, how many you get and what it costs. The long
+ * description is still there on hover, where it costs nothing to look at.
  */
 export class ShopUI {
   private readonly root = document.getElementById('shop') as HTMLElement;
   private readonly title = document.getElementById('shop-title') as HTMLElement;
   private readonly pointsEl = document.getElementById('shop-points') as HTMLElement;
-  private readonly tabsEl = document.getElementById('shop-tabs') as HTMLElement;
   private readonly grid = document.getElementById('shop-grid') as HTMLElement;
 
   private active: ShopKind = ShopKind.Weapons;
@@ -29,29 +27,15 @@ export class ShopUI {
   onClose: (() => void) | null = null;
   /** Extra per-item gating (e.g. the scope needs the rifle). */
   isAvailable: ((item: ShopItem) => boolean) | null = null;
-  ownedLabel: ((item: ShopItem) => string | null) | null = null;
 
   constructor(private readonly economy: Economy) {
-    this.buildTabs();
     this.root.addEventListener('click', (e) => {
       if (e.target === this.root) this.close();
     });
   }
 
-  private buildTabs(): void {
-    this.tabsEl.innerHTML = '';
-    for (const t of TABS) {
-      const div = document.createElement('div');
-      div.className = 'shop-tab';
-      div.textContent = t.label;
-      div.dataset.kind = t.kind;
-      div.addEventListener('click', () => {
-        this.active = t.kind;
-        this.render();
-      });
-      this.tabsEl.appendChild(div);
-    }
-  }
+  /** The trade of the stall currently open, for the buyer to check against. */
+  get kind(): ShopKind { return this.active; }
 
   show(kind: ShopKind, merchantName: string): void {
     this.active = kind;
@@ -71,14 +55,13 @@ export class ShopUI {
   render(): void {
     this.pointsEl.textContent = money(this.economy.points);
 
-    for (const tab of Array.from(this.tabsEl.children) as HTMLElement[]) {
-      tab.classList.toggle('active', tab.dataset.kind === this.active);
-    }
-
     this.grid.innerHTML = '';
     for (const item of itemsFor(this.active)) {
+      // Belt and braces: `itemsFor` already filtered, but the card is the thing
+      // that becomes a purchase, so it checks the stall itself.
+      if (!stocks(this.active, item)) continue;
+
       const price = this.economy.priceOf(item);
-      const owned = this.ownedLabel?.(item) ?? null;
       const gated = this.isAvailable ? !this.isAvailable(item) : false;
       const soldOut = Boolean(item.once && this.economy.purchaseCount(item.id) > 0);
       const affordable = this.economy.points >= price;
@@ -86,29 +69,27 @@ export class ShopUI {
 
       const card = document.createElement('div');
       card.className = `shop-item${disabled ? ' disabled' : ''}`;
+      card.title = item.description;
 
-      const row = document.createElement('div');
-      row.className = 'row';
-      const name = document.createElement('span');
+      const art = document.createElement('div');
+      art.className = 'art';
+      art.innerHTML = itemIconSvg(item.id);
+      if (item.qty && item.qty > 1) {
+        const qty = document.createElement('span');
+        qty.className = 'qty';
+        qty.textContent = `x${item.qty}`;
+        art.appendChild(qty);
+      }
+
+      const name = document.createElement('div');
       name.className = 'name';
       name.textContent = item.name;
-      const cost = document.createElement('span');
+
+      const cost = document.createElement('div');
       cost.className = 'cost';
       cost.textContent = soldOut ? 'OWNED' : money(price);
-      row.append(name, cost);
 
-      const desc = document.createElement('div');
-      desc.className = 'desc';
-      desc.textContent = item.description;
-
-      card.append(row, desc);
-
-      if (owned) {
-        const o = document.createElement('div');
-        o.className = 'owned';
-        o.textContent = owned;
-        card.appendChild(o);
-      }
+      card.append(art, name, cost);
 
       if (!disabled) {
         card.addEventListener('click', () => {

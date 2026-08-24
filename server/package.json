@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "smoke": "node test/smoke.mjs",
     "test:ff": "node test/ff.mjs",
-    "test:targeting": "tsx test/targeting.ts"
+    "test:targeting": "tsx test/targeting.ts",
+    "test:village": "tsx test/village.ts"
   },
   "dependencies": {
     "@colyseus/core": "0.16.24",

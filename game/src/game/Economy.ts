@@ -46,6 +46,15 @@ export interface ShopItem {
   readonly material?: Mat;
   readonly deployable?: DeployId;
   readonly amount?: number;
+  /**
+   * How many of the thing you get, for the card to show as a count.
+   *
+   * Separate from `amount` on purpose: `amount` is whatever the effect needs
+   * (a percentage for the flak vest, a fraction of a reserve for the ammo
+   * box), and only some of those numbers are a quantity a buyer would count.
+   * Left off when the answer is "one".
+   */
+  readonly qty?: number;
   /** Can only be bought once per run. */
   readonly once?: boolean;
   /** Price grows by this factor each purchase. */
@@ -58,9 +67,9 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   // which one you carry is settled before the drop. This stall covers what a
   // class *can't* give you -- consumables and the one weapon upgrade.
   {
-    id: 'grenades', shop: ShopKind.Weapons, name: 'Grenades x3', cost: 500,
+    id: 'grenades', shop: ShopKind.Weapons, name: 'Grenades', cost: 500,
     description: '130 damage in the blast radius, and it dents walls.',
-    effect: ItemEffect.GiveGrenades, amount: 3,
+    effect: ItemEffect.GiveGrenades, amount: 3, qty: 3,
   },
   {
     id: 'ammo', shop: ShopKind.Weapons, name: 'Ammo Refill', cost: 150,
@@ -85,32 +94,32 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
 
   // --- Materials Merchant --------------------------------------------------
   {
-    id: 'dirt', shop: ShopKind.Materials, name: '50 Dirt Blocks', cost: 200,
+    id: 'dirt', shop: ShopKind.Materials, name: 'Dirt Blocks', cost: 200,
     description: '30 HP each. Cheap patch material.',
-    effect: ItemEffect.GiveBlocks, material: Mat.Dirt, amount: 50,
+    effect: ItemEffect.GiveBlocks, material: Mat.Dirt, amount: 50, qty: 50,
   },
   {
-    id: 'wood', shop: ShopKind.Materials, name: '50 Wood Blocks', cost: 350,
+    id: 'wood', shop: ShopKind.Materials, name: 'Wood Blocks', cost: 350,
     description: '60 HP each.',
-    effect: ItemEffect.GiveBlocks, material: Mat.Wood, amount: 50,
+    effect: ItemEffect.GiveBlocks, material: Mat.Wood, amount: 50, qty: 50,
   },
   {
-    id: 'stone', shop: ShopKind.Materials, name: '50 Stone Blocks', cost: 600,
+    id: 'stone', shop: ShopKind.Materials, name: 'Stone Blocks', cost: 600,
     description: '150 HP each. The standard wall upgrade.',
-    effect: ItemEffect.GiveBlocks, material: Mat.Stone, amount: 50,
+    effect: ItemEffect.GiveBlocks, material: Mat.Stone, amount: 50, qty: 50,
   },
   {
-    id: 'reinforced', shop: ShopKind.Materials, name: '25 Reinforced Blocks', cost: 900,
+    id: 'reinforced', shop: ShopKind.Materials, name: 'Reinforced Blocks', cost: 900,
     description: '400 HP each. Tanks rifle fire well.',
-    effect: ItemEffect.GiveBlocks, material: Mat.Reinforced, amount: 25,
+    effect: ItemEffect.GiveBlocks, material: Mat.Reinforced, amount: 25, qty: 25,
   },
   {
-    id: 'steel', shop: ShopKind.Materials, name: '10 Steel Blocks', cost: 1200,
+    id: 'steel', shop: ShopKind.Materials, name: 'Steel Blocks', cost: 1200,
     description: '1000 HP each. Resists rockets for a while.',
-    effect: ItemEffect.GiveBlocks, material: Mat.Steel, amount: 10,
+    effect: ItemEffect.GiveBlocks, material: Mat.Steel, amount: 10, qty: 10,
   },
   {
-    id: 'repair-all', shop: ShopKind.Materials, name: 'Repair All Damage', cost: 1500,
+    id: 'repair-all', shop: ShopKind.Materials, name: 'Repair All', cost: 1500,
     description: 'Instantly restores every damaged block on the map to full HP.',
     effect: ItemEffect.RepairAll, escalate: 1.25,
   },
@@ -120,14 +129,14 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   // deploy slot (5), so the price is for the thing, not for it being useful --
   // where you stand it is the rest of the cost.
   {
-    id: 'barricade', shop: ShopKind.Defense, name: 'Sandbag Barricade x3', cost: 450,
+    id: 'barricade', shop: ShopKind.Defense, name: 'Sandbag Barricade', cost: 450,
     description: 'A 3-wide, 2-high sandbag wall that drops in one piece. Same HP as reinforced block.',
-    effect: ItemEffect.GiveDeployable, deployable: DeployId.Barricade, amount: 3,
+    effect: ItemEffect.GiveDeployable, deployable: DeployId.Barricade, amount: 3, qty: 3,
   },
   {
-    id: 'firing-barricade', shop: ShopKind.Defense, name: 'Firing Barricade x2', cost: 600,
+    id: 'firing-barricade', shop: ShopKind.Defense, name: 'Firing Barricade', cost: 600,
     description: 'Sandbags with a loophole in the middle: crouch behind it for full cover and keep shooting.',
-    effect: ItemEffect.GiveDeployable, deployable: DeployId.FiringBarricade, amount: 2,
+    effect: ItemEffect.GiveDeployable, deployable: DeployId.FiringBarricade, amount: 2, qty: 2,
   },
   {
     id: 'turret', shop: ShopKind.Defense, name: 'Sentry Turret', cost: 2200,
@@ -141,7 +150,7 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   },
   {
     id: 'ammo-crate', shop: ShopKind.Defense, name: 'Ammo Crate', cost: 800,
-    description: 'Four resupplies, taken with E — and it works mid-wave, when the merchants are shut.',
+    description: 'Four resupplies, taken with E — a forward dump, so a dry magazine costs you cover instead of the walk back to town.',
     effect: ItemEffect.GiveDeployable, deployable: DeployId.AmmoCrate, amount: 1, escalate: 1.2,
   },
 
@@ -165,6 +174,16 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
 
 export function itemsFor(shop: ShopKind): ShopItem[] {
   return SHOP_ITEMS.filter((i) => i.shop === shop);
+}
+
+/**
+ * Whether a stall carries an item at all.
+ *
+ * `shop` on an item is the whole of a merchant's inventory: the weapon trader
+ * has no sandbags out the back, so asking them for one is not a price question.
+ */
+export function stocks(shop: ShopKind, item: ShopItem): boolean {
+  return item.shop === shop;
 }
 
 /**

@@ -174,7 +174,7 @@ export class HUD {
     }
 
     // Being dry is a shopping instruction, not just a status: say where the
-    // ammo comes from, because the merchants shut the moment the wave starts.
+    // ammo comes from, because a crate is a few steps and the market is a run.
     const hint = w.reloading ? 'RELOADING…'
       : (w.needsAmmo && w.ammo === 0 && w.stock > 0 ? 'PRESS R TO RELOAD'
         : (w.needsAmmo && w.totalAmmo === 0 ? 'OUT OF AMMO — RESUPPLY AT A CRATE OR THE WEAPON MERCHANT' : ''));

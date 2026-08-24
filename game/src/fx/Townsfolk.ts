@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import type { VoxelWorld } from '../voxel/VoxelWorld';
+import { walkClear } from './walk';
 
 /**
  * The people in the village.
@@ -301,6 +303,12 @@ export interface TownsfolkDown {
 export interface TownsfolkOptions {
   rand?: () => number;
   /**
+   * The world they are standing in, so they walk round the huts rather than
+   * through them and follow the ground under their feet. Optional only so a
+   * test can stand them up without one; without it they clip, as they used to.
+   */
+  world?: VoxelWorld;
+  /**
    * One of them has cried out, at their chest. `child` is the body scale rather
    * than anything the simulation knows: it is there so the caller can pick a
    * voice that belongs to the person who was shot at.
@@ -312,12 +320,14 @@ export class Townsfolk {
   readonly mesh: THREE.InstancedMesh;
   private readonly people: Person[] = [];
   private readonly rand: () => number;
+  private readonly world: VoxelWorld | null;
   private readonly onScream:
     ((x: number, y: number, z: number, child: boolean) => void) | undefined;
   private capacity = 0;
 
   constructor(capacity = 16, opts: TownsfolkOptions = {}) {
     this.rand = opts.rand ?? Math.random;
+    this.world = opts.world ?? null;
     this.onScream = opts.onScream;
     this.capacity = capacity;
 
@@ -400,8 +410,12 @@ export class Townsfolk {
         const dist = Math.hypot(dx, dz);
         p.desiredYaw = Math.atan2(dx, dz);
         const move = Math.min(dist, RUN_SPEED * p.speedMul * dt);
-        p.x += (dx / dist || 0) * move;
-        p.z += (dz / dist || 0) * move;
+        // Panic does not go through a wall either. Someone who runs into one
+        // is done running: they have got as far as the village lets them, and
+        // standing against it is a better picture than walking into it.
+        if (!this.step(p, (dx / dist || 0) * move, (dz / dist || 0) * move)) {
+          p.timer = Math.min(p.timer, 0.4);
+        }
         // Running legs go over faster than walking ones for the same ground.
         p.walkPhase += (move * STRIDE * 1.25) / p.scale;
         p.yaw += shortestAngle(p.yaw, p.desiredYaw) * Math.min(1, dt * 5);
@@ -423,8 +437,14 @@ export class Townsfolk {
         } else {
           p.desiredYaw = Math.atan2(dx, dz);
           const move = Math.min(dist, WALK_SPEED * p.speedMul * dt);
-          p.x += (dx / dist) * move;
-          p.z += (dz / dist) * move;
+          // Walked into something: that errand is over, and they stand about
+          // for a moment before wanting somewhere else. Without this they
+          // press into the wall for the full twenty seconds of the timer.
+          if (!this.step(p, (dx / dist) * move, (dz / dist) * move)) {
+            p.pose = p.basePose;
+            p.timer = 1 + rand() * 3;
+            p.homeYaw = p.yaw;
+          }
           p.walkPhase += (move * STRIDE) / p.scale;
         }
       } else if (p.timer <= 0) {
@@ -486,6 +506,23 @@ export class Townsfolk {
    * the way the paddy refills -- the field still has to be worked and the
    * market still has to open, whatever happened in them last night.
    */
+  /**
+   * One step of a walk, through whatever is in the way.
+   *
+   * Returns whether they actually got anywhere. With no world wired up they
+   * move freely, which is what a bare `new Townsfolk()` in a test wants.
+   */
+  private step(p: Person, stepX: number, stepZ: number): boolean {
+    if (this.world === null) {
+      p.x += stepX;
+      p.z += stepZ;
+      return true;
+    }
+    // The same radius their own hitbox uses, so what stops a round stops a
+    // shoulder.
+    return walkClear(this.world, p, stepX, stepZ, 0.46 * p.scale);
+  }
+
   respawn(): void {
     for (const p of this.people) {
       if (!p.killable) continue;

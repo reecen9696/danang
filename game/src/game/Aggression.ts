@@ -23,6 +23,17 @@ const WOUND_HEAT = 0.055;
 const SCARE_HEAT = 0.008;
 /** What one death adds to the floor, permanently. */
 const KILL_GRUDGE = 0.05;
+/**
+ * The village buffalo, shot dead in its own grass.
+ *
+ * Not quite a person, and not remotely an accident: a con trau is the plough,
+ * the cart and the savings of the household that owns it, and killing one is
+ * the clearest possible statement about what the firebase thinks of the people
+ * below it. Heavier than wounding somebody, and it leaves a mark that does not
+ * cool off, because that household's year is gone either way.
+ */
+const OX_HEAT = 0.13;
+const OX_GRUDGE = 0.04;
 /** Ceiling on the floor: there has to be somewhere left to escalate to. */
 const MAX_GRUDGE = 0.62;
 /** Heat shed per second. About three minutes to walk one killing off. */
@@ -110,6 +121,18 @@ export class Aggression {
 
   civilianWounded(): number {
     return this.bump(WOUND_HEAT);
+  }
+
+  /**
+   * The buffalo is dead.
+   *
+   * Deliberately not counted as a civilian: the log line and the tally are
+   * about people, and quietly folding an animal into that number would make
+   * the one figure the game reports about your conduct a lie.
+   */
+  livestockKilled(): number {
+    this.grudge = Math.min(MAX_GRUDGE, this.grudge + OX_GRUDGE);
+    return this.bump(OX_HEAT);
   }
 
   /** Fire through the field that hit nobody. Cheap, but not free. */
