@@ -18,6 +18,9 @@ const SIZE = 150;
 /** World units visible across the minimap. */
 const RANGE = 150;
 
+/** How close an unalerted sentry has to be before the radar admits he exists. */
+const GARRISON_REVEAL = 12;
+
 /**
  * Radar-style minimap drawn to a small 2D canvas.
  *
@@ -29,7 +32,6 @@ export class Minimap {
   private timer = 0;
 
   // The original map markers, drawn in place of hand-rolled canvas shapes.
-  private readonly imgBg = sprite(GFX.mapBg);
   private readonly imgPlayer = sprite(GFX.mapPlayer);
   private readonly imgView = sprite(GFX.mapView);
   private readonly imgPost = sprite(GFX.mapCommandPost);
@@ -60,23 +62,8 @@ export class Minimap {
 
     ctx.clearRect(0, 0, SIZE, SIZE);
 
-    // Backdrop — MapBg.png tiled, falling back to a flat fill until it loads.
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(half, half, half - 1, 0, Math.PI * 2);
-    ctx.clip();
-    if (this.imgBg.complete && this.imgBg.naturalWidth > 0) {
-      const pat = ctx.createPattern(this.imgBg, 'repeat');
-      if (pat) {
-        ctx.fillStyle = pat;
-        ctx.fillRect(0, 0, SIZE, SIZE);
-      }
-    } else {
-      ctx.fillStyle = 'rgba(8, 12, 16, 0.72)';
-      ctx.fillRect(0, 0, SIZE, SIZE);
-    }
-    ctx.restore();
-
+    // No backdrop and no frame: the ring below is the whole chrome, so what
+    // you read is the contacts rather than a plate with contacts on it.
     ctx.save();
     ctx.beginPath();
     ctx.arc(half, half, half - 1, 0, Math.PI * 2);
@@ -92,14 +79,19 @@ export class Minimap {
       (wz - pz) * scale,
     ];
 
-    // Range rings
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    // Range rings, with the outermost doing duty as the rim.
     ctx.lineWidth = 1;
-    for (const r of [0.33, 0.66, 1]) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    for (const r of [0.33, 0.66]) {
       ctx.beginPath();
       ctx.arc(0, 0, (half - 1) * r, 0, Math.PI * 2);
       ctx.stroke();
     }
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, half - 2, 0, Math.PI * 2);
+    ctx.stroke();
 
     // Base marker — the command post icon, counter-rotated so it stays upright.
     {
@@ -116,6 +108,13 @@ export class Minimap {
     // Enemies
     for (const bot of bots.bots) {
       if (!bot.alive) continue;
+      // A camp you can read off the radar is not an ambush. Garrisons stay off
+      // it until they give themselves away -- by opening up, by being shot at,
+      // or by being close enough that you would hear them anyway.
+      if (bot.garrison && !bot.revealed) {
+        const near = Math.hypot(bot.position.x - px, bot.position.z - pz);
+        if (near > GARRISON_REVEAL) continue;
+      }
       const [bx, bz] = plot(bot.position.x, bot.position.z);
       if (Math.hypot(bx, bz) > half - 2) {
         // Clamp off-screen contacts to the rim so you still know the bearing.
@@ -133,6 +132,33 @@ export class Minimap {
     }
 
     ctx.restore();
+
+    // North, on the rim.
+    //
+    // The map turns with you, so north is the one fixed thing on it -- without
+    // a mark for it the radar tells you where the contacts are relative to your
+    // nose and nothing about where they are on the ground. World north is -Z,
+    // which the map rotation carries to (sin yaw, -cos yaw).
+    {
+      const dirX = Math.sin(yaw);
+      const dirY = -Math.cos(yaw);
+      ctx.save();
+      // A tick straddling the rim, so the letter reads as a bearing rather
+      // than as another contact.
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(half + dirX * (half - 7), half + dirY * (half - 7));
+      ctx.lineTo(half + dirX * (half - 1), half + dirY * (half - 1));
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('N', half + dirX * (half - 15), half + dirY * (half - 15));
+      ctx.restore();
+    }
 
     // Player: the original view cone under the original arrow, both centred.
     if (this.imgView.complete && this.imgView.naturalWidth > 0) {
@@ -156,8 +182,6 @@ export class Minimap {
       ctx.closePath();
       ctx.fill();
     }
-
-    // The rim itself is MinimapBorder.png, layered over the canvas in CSS.
   }
 
   /**

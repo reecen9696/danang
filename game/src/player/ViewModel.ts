@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { WeaponId } from '../weapons/definitions';
 
-interface Part {
+export interface Part {
   /** Centre offset, in model-local units. -Z points down the barrel. */
   x: number; y: number; z: number;
   /** Half-extents, so a part spans `centre +/- s`. */
@@ -12,8 +12,8 @@ interface Part {
 interface Model {
   parts: readonly Part[];
   /**
-   * Height of the sight line: the top of the rear notch's shoulders, which the
-   * front post's tip is levelled with. ADS drops the model by exactly this so
+   * Height of the sight line, level with the front post's tip. ADS drops the
+   * model by exactly this so
    * both land on the crosshair -- anything at this height projects to the
    * centre of the screen no matter how far down the barrel it sits.
    */
@@ -40,18 +40,27 @@ const STEEL_DARK = 0x35383e;
 const STEEL_BLACK = 0x17181b;
 const STEEL_LIGHT = 0x9aa0a8;
 const TIP_RED = 0x8e2b26;
+/**
+ * The one warm tone in the set, and it is spent on exactly two things: the
+ * belt hanging out of the M60 and the round in the Thumper's breech. Both are
+ * ammunition you can see, which is the only reason either gun needs a colour
+ * the rest of the rack doesn't have.
+ */
+const BRASS = 0xa8863a;
+const BRASS_DARK = 0x7a6028;
 
 /**
  * Chunky low-poly gun models, built from many small boxes so they read as
  * voxel props rather than as smooth geometry.
  *
  * The rifle is the hero model: a bolt-action with a slab stock, a squared
- * receiver, a notched rear sight and a red-tipped front post, sized so the
- * ironsight picture fills the screen the way Ace of Spades' does.
+ * receiver and a red-tipped front post. The rifle is the only gun with a rear
+ * sight, and it is two blades with a wide gap between them: the other guns keep
+ * the front post alone so nothing thick blocks the view down the barrel.
  */
 const MODELS: Record<string, Model> = {
   [WeaponId.Rifle]: {
-    sightY: 0.225,
+    sightY: 0.111,
     adsZ: -0.50,
     muzzle: [0, 0.055, -1.32],
     parts: [
@@ -74,11 +83,6 @@ const MODELS: Record<string, Model> = {
       { x: 0, y: -0.110, z: -0.345, sx: 0.040, sy: 0.038, sz: 0.065, color: STEEL_DARK },
       { x: 0, y: -0.105, z: -0.235, sx: 0.018, sy: 0.026, sz: 0.028, color: STEEL_BLACK },
 
-      // --- Rear sight: base plus two ears with a notch between them ----
-      { x: 0, y: 0.128, z: -0.47, sx: 0.076, sy: 0.025, sz: 0.050, color: STEEL },
-      { x: -0.051, y: 0.189, z: -0.47, sx: 0.026, sy: 0.036, sz: 0.046, color: STEEL_DARK },
-      { x: 0.051, y: 0.189, z: -0.47, sx: 0.026, sy: 0.036, sz: 0.046, color: STEEL_DARK },
-
       // --- Handguard and barrel ---------------------------------------
       { x: 0, y: 0.010, z: -0.70, sx: 0.046, sy: 0.048, sz: 0.20, color: GRIP },
       { x: 0, y: 0.055, z: -0.72, sx: 0.026, sy: 0.026, sz: 0.20, color: STEEL_DARK },
@@ -86,10 +90,21 @@ const MODELS: Record<string, Model> = {
       { x: 0, y: 0.055, z: -1.05, sx: 0.024, sy: 0.024, sz: 0.30, color: STEEL_DARK },
       { x: 0, y: 0.055, z: -1.30, sx: 0.031, sy: 0.031, sz: 0.038, color: STEEL_BLACK },
 
-      // --- Front sight: post on a base, red tip on top ----------------
-      { x: 0, y: 0.116, z: -1.22, sx: 0.017, sy: 0.037, sz: 0.019, color: STEEL_DARK },
-      { x: 0, y: 0.177, z: -1.22, sx: 0.010, sy: 0.024, sz: 0.012, color: STEEL_BLACK },
-      { x: 0, y: 0.213, z: -1.22, sx: 0.011, sy: 0.012, sz: 0.013, color: TIP_RED },
+      // --- Front sight: a thin post with a red tip on top --------------
+      // Kept deliberately narrow: anything thicker eats the middle of the
+      // screen while aiming, and the tip has to read inside the rear notch.
+      { x: 0, y: 0.087, z: -1.22, sx: 0.007, sy: 0.008, sz: 0.008, color: STEEL_DARK },
+      { x: 0, y: 0.100, z: -1.22, sx: 0.005, sy: 0.005, sz: 0.006, color: STEEL_BLACK },
+      { x: 0, y: 0.108, z: -1.22, sx: 0.005, sy: 0.003, sz: 0.006, color: TIP_RED },
+
+      // --- Rear sight: two blades stood on the back of the receiver -----
+      // Their tops sit level with the front tip, so at full ADS the notch,
+      // the red tip and the crosshair all stack up on the view axis. They are
+      // short enough to sink into the receiver's top slab, which is what keeps
+      // them seated rather than perched. The gap between them is left wide --
+      // it frames the post without hiding it.
+      { x: -0.021, y: 0.097, z: -0.22, sx: 0.009, sy: 0.014, sz: 0.012, color: STEEL_BLACK },
+      { x: 0.021, y: 0.097, z: -0.22, sx: 0.009, sy: 0.014, sz: 0.012, color: STEEL_BLACK },
     ],
   },
 
@@ -103,9 +118,7 @@ const MODELS: Record<string, Model> = {
       { x: 0, y: 0.020, z: -0.47, sx: 0.017, sy: 0.017, sz: 0.03, color: STEEL_BLACK },
       { x: 0, y: -0.130, z: -0.14, sx: 0.032, sy: 0.082, sz: 0.048, color: GRIP_DARK },
       { x: 0, y: -0.075, z: -0.235, sx: 0.017, sy: 0.024, sz: 0.024, color: STEEL_BLACK },
-      { x: -0.024, y: 0.076, z: -0.20, sx: 0.011, sy: 0.017, sz: 0.014, color: STEEL_BLACK },
-      { x: 0.024, y: 0.076, z: -0.20, sx: 0.011, sy: 0.017, sz: 0.014, color: STEEL_BLACK },
-      { x: 0, y: 0.077, z: -0.44, sx: 0.009, sy: 0.016, sz: 0.012, color: STEEL_BLACK },
+      { x: 0, y: 0.077, z: -0.44, sx: 0.005, sy: 0.016, sz: 0.006, color: STEEL_BLACK },
     ],
   },
 
@@ -124,10 +137,8 @@ const MODELS: Record<string, Model> = {
       { x: 0, y: -0.070, z: -0.20, sx: 0.016, sy: 0.024, sz: 0.024, color: STEEL_BLACK },
       { x: 0, y: 0.000, z: -0.03, sx: 0.018, sy: 0.018, sz: 0.12, color: STEEL },
       { x: 0, y: -0.010, z: 0.11, sx: 0.028, sy: 0.048, sz: 0.020, color: STEEL_DARK },
-      { x: -0.030, y: 0.108, z: -0.22, sx: 0.013, sy: 0.026, sz: 0.016, color: STEEL_BLACK },
-      { x: 0.030, y: 0.108, z: -0.22, sx: 0.013, sy: 0.026, sz: 0.016, color: STEEL_BLACK },
-      { x: 0, y: 0.076, z: -0.76, sx: 0.020, sy: 0.022, sz: 0.018, color: STEEL_DARK },
-      { x: 0, y: 0.116, z: -0.76, sx: 0.008, sy: 0.018, sz: 0.012, color: STEEL_BLACK },
+      { x: 0, y: 0.076, z: -0.76, sx: 0.007, sy: 0.022, sz: 0.008, color: STEEL_DARK },
+      { x: 0, y: 0.116, z: -0.76, sx: 0.005, sy: 0.018, sz: 0.006, color: STEEL_BLACK },
     ],
   },
 
@@ -145,7 +156,106 @@ const MODELS: Record<string, Model> = {
       { x: 0, y: -0.030, z: -0.88, sx: 0.021, sy: 0.021, sz: 0.28, color: STEEL_DARK },
       { x: 0, y: 0.048, z: -0.80, sx: 0.027, sy: 0.027, sz: 0.42, color: STEEL_DARK },
       { x: 0, y: 0.048, z: -1.20, sx: 0.032, sy: 0.032, sz: 0.035, color: STEEL_BLACK },
-      { x: 0, y: 0.088, z: -1.14, sx: 0.010, sy: 0.012, sz: 0.012, color: TIP_RED },
+      { x: 0, y: 0.088, z: -1.14, sx: 0.005, sy: 0.012, sz: 0.006, color: TIP_RED },
+    ],
+  },
+
+  /**
+   * The door gun.
+   *
+   * Bigger than anything else in the rack on purpose -- it is the one weapon
+   * in the game you find rather than buy, and the silhouette has to say so
+   * before the ammo counter does. The belt is the tell: eight little brass
+   * boxes stepping down out of the feed tray and swinging under the receiver,
+   * which is the detail that separates a machine gun from a long rifle at a
+   * glance. It never comes up to a sight, so the front post is furniture.
+   */
+  [WeaponId.MachineGun]: {
+    sightY: 0.175,
+    adsZ: -0.55,
+    muzzle: [0, 0.045, -1.16],
+    parts: [
+      // --- Butt and grip ----------------------------------------------
+      { x: 0, y: -0.060, z: 0.20, sx: 0.048, sy: 0.086, sz: 0.16, color: GRIP_DARK },
+      { x: 0, y: -0.020, z: 0.02, sx: 0.046, sy: 0.062, sz: 0.06, color: GRIP },
+      { x: 0, y: -0.150, z: -0.10, sx: 0.030, sy: 0.090, sz: 0.044, color: GRIP_DARK },
+      { x: 0, y: -0.088, z: -0.19, sx: 0.017, sy: 0.026, sz: 0.026, color: STEEL_BLACK },
+
+      // --- Receiver, with the feed tray cover proud of the top ---------
+      { x: 0, y: 0.000, z: -0.30, sx: 0.055, sy: 0.070, sz: 0.28, color: STEEL_DARK },
+      { x: 0, y: 0.078, z: -0.32, sx: 0.048, sy: 0.022, sz: 0.24, color: STEEL },
+      { x: 0, y: -0.078, z: -0.30, sx: 0.048, sy: 0.020, sz: 0.26, color: STEEL_BLACK },
+      // Feed tray hinge and the cocking handle on the right.
+      { x: 0.062, y: 0.042, z: -0.36, sx: 0.014, sy: 0.020, sz: 0.10, color: STEEL_LIGHT },
+      { x: 0.086, y: -0.010, z: -0.20, sx: 0.028, sy: 0.016, sz: 0.030, color: STEEL_LIGHT },
+
+      // --- The belt, spilling out of the tray and hanging under --------
+      { x: 0.052, y: 0.014, z: -0.40, sx: 0.026, sy: 0.016, sz: 0.030, color: BRASS },
+      { x: 0.062, y: -0.024, z: -0.38, sx: 0.024, sy: 0.016, sz: 0.028, color: BRASS_DARK },
+      { x: 0.064, y: -0.062, z: -0.35, sx: 0.024, sy: 0.016, sz: 0.028, color: BRASS },
+      { x: 0.056, y: -0.098, z: -0.31, sx: 0.023, sy: 0.016, sz: 0.026, color: BRASS_DARK },
+      { x: 0.038, y: -0.126, z: -0.26, sx: 0.023, sy: 0.015, sz: 0.026, color: BRASS },
+      { x: 0.012, y: -0.140, z: -0.21, sx: 0.024, sy: 0.014, sz: 0.026, color: BRASS_DARK },
+      { x: -0.016, y: -0.140, z: -0.17, sx: 0.024, sy: 0.014, sz: 0.026, color: BRASS },
+      // Ammo can slung under the receiver, where the belt disappears into it.
+      { x: -0.010, y: -0.176, z: -0.10, sx: 0.048, sy: 0.048, sz: 0.075, color: 0x39421f },
+      { x: -0.010, y: -0.132, z: -0.10, sx: 0.052, sy: 0.012, sz: 0.079, color: 0x2c331a },
+
+      // --- Barrel, heat shield and carry handle ------------------------
+      { x: 0, y: 0.018, z: -0.66, sx: 0.040, sy: 0.044, sz: 0.11, color: STEEL_DARK },
+      { x: 0, y: 0.040, z: -0.86, sx: 0.024, sy: 0.024, sz: 0.26, color: STEEL_BLACK },
+      { x: 0, y: 0.040, z: -1.14, sx: 0.031, sy: 0.031, sz: 0.045, color: STEEL_BLACK },
+      // Handle: a bar on two stubby posts, the M60's clearest single read.
+      { x: 0, y: 0.076, z: -0.62, sx: 0.012, sy: 0.024, sz: 0.014, color: STEEL },
+      { x: 0, y: 0.076, z: -0.80, sx: 0.012, sy: 0.024, sz: 0.014, color: STEEL },
+      { x: 0, y: 0.100, z: -0.71, sx: 0.016, sy: 0.012, sz: 0.110, color: STEEL },
+
+      // --- Bipod, folded back along the barrel -------------------------
+      { x: 0.046, y: -0.052, z: -0.96, sx: 0.010, sy: 0.058, sz: 0.011, color: STEEL_DARK },
+      { x: -0.046, y: -0.052, z: -0.96, sx: 0.010, sy: 0.058, sz: 0.011, color: STEEL_DARK },
+      { x: 0, y: 0.012, z: -0.95, sx: 0.022, sy: 0.018, sz: 0.024, color: STEEL_DARK },
+
+      { x: 0, y: 0.098, z: -1.02, sx: 0.007, sy: 0.028, sz: 0.008, color: STEEL_DARK },
+      { x: 0, y: 0.138, z: -1.02, sx: 0.005, sy: 0.014, sz: 0.006, color: TIP_RED },
+    ],
+  },
+
+  /**
+   * The Thumper.
+   *
+   * Short, fat and almost all barrel -- it is a break-action shotgun that fires
+   * a grenade, and the model is built to look like one so nobody expects it to
+   * shoot flat. The leaf sight standing up off the breech is the piece that
+   * matters: it is the only sight in the game with graduations on it, and it
+   * is there to say out loud that this gun is aimed by lobbing.
+   */
+  [WeaponId.Thumper]: {
+    sightY: 0.150,
+    adsZ: -0.44,
+    muzzle: [0, 0.030, -0.66],
+    parts: [
+      // --- Stock ------------------------------------------------------
+      { x: 0, y: -0.070, z: 0.16, sx: 0.046, sy: 0.078, sz: 0.13, color: GRIP_DARK },
+      { x: 0, y: -0.040, z: 0.00, sx: 0.044, sy: 0.058, sz: 0.06, color: GRIP },
+      { x: 0, y: -0.130, z: -0.09, sx: 0.030, sy: 0.070, sz: 0.042, color: GRIP_DARK },
+      { x: 0, y: -0.078, z: -0.17, sx: 0.017, sy: 0.024, sz: 0.026, color: STEEL_BLACK },
+
+      // --- Breech, and the hinge it opens on ---------------------------
+      { x: 0, y: 0.005, z: -0.24, sx: 0.048, sy: 0.056, sz: 0.10, color: STEEL_DARK },
+      { x: 0, y: -0.048, z: -0.34, sx: 0.026, sy: 0.020, sz: 0.030, color: STEEL_LIGHT },
+      // The round sitting in the chamber, visible through the open action.
+      { x: 0, y: 0.030, z: -0.30, sx: 0.026, sy: 0.026, sz: 0.030, color: BRASS },
+
+      // --- Barrel: one fat 40mm tube over a wooden fore-end -------------
+      { x: 0, y: 0.030, z: -0.46, sx: 0.043, sy: 0.043, sz: 0.14, color: STEEL_DARK },
+      { x: 0, y: 0.030, z: -0.62, sx: 0.040, sy: 0.040, sz: 0.05, color: STEEL_BLACK },
+      { x: 0, y: -0.022, z: -0.44, sx: 0.038, sy: 0.026, sz: 0.11, color: GRIP },
+
+      // --- Leaf sight, standing up off the breech -----------------------
+      { x: 0, y: 0.082, z: -0.20, sx: 0.006, sy: 0.036, sz: 0.007, color: STEEL_DARK },
+      { x: 0, y: 0.124, z: -0.20, sx: 0.024, sy: 0.008, sz: 0.006, color: STEEL_BLACK },
+      { x: 0, y: 0.148, z: -0.20, sx: 0.018, sy: 0.008, sz: 0.006, color: STEEL_BLACK },
+      { x: 0, y: 0.084, z: -0.60, sx: 0.005, sy: 0.020, sz: 0.006, color: TIP_RED },
     ],
   },
 
@@ -178,13 +288,26 @@ const MODELS: Record<string, Model> = {
   },
 };
 
+/**
+ * The box list for one weapon, for anything that wants to draw a gun somewhere
+ * other than in the player's hands.
+ *
+ * A gun lying in a crate out in the world has to be the same object you end up
+ * holding, or the crate is advertising something it doesn't contain -- so the
+ * prop is built from this list rather than from a second model that would drift
+ * out of step with it the first time either is touched.
+ */
+export function weaponParts(id: WeaponId): readonly Part[] | undefined {
+  return MODELS[id]?.parts;
+}
+
 /** The models are authored at world scale; shrink them for the view camera. */
 const MODEL_SCALE = 1.25;
 /**
  * The scale the ADS offsets in `MODELS` were authored against. Growing
  * `MODEL_SCALE` also pushes the sights further down -Z, so the ADS offsets are
- * scaled by the same ratio -- otherwise a bigger model would shove its rear
- * sight into the eye.
+ * scaled by the same ratio -- otherwise a bigger model would shove the
+ * receiver into the eye.
  */
 const ADS_REFERENCE_SCALE = 0.55;
 /**

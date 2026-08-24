@@ -50,6 +50,7 @@ export const GFX = {
   menuItemRing: gfx('Limbo/MenuItemRing.png'),
   bigMenuItem: gfx('Limbo/BigMenuItem.png'),
   banner: gfx('Banner.png'),
+  logo: gfx('UI/Logo.png'),
   button: gfx('UI/Button.png'),
   cursor: gfx('UI/Cursor.png'),
   close: gfx('UI/Close.png'),
@@ -126,6 +127,4 @@ export function installSpriteVars(): void {
   set('--sprite-alert', GFX.alertIcon);
   set('--sprite-cursor', GFX.cursor);
   set('--sprite-close', GFX.close);
-  set('--sprite-map-bg', GFX.mapBg);
-  set('--sprite-minimap-border', GFX.minimapBorder);
 }

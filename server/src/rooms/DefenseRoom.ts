@@ -164,7 +164,6 @@ export class DefenseRoom extends Room<RoomState> {
     });
 
     // Any player can cut the prep phase short; it is a co-op game.
-    this.onMessage('ready', () => this.sim.waves.readyUp());
   }
 
   private validOp(op: VoxelOp): boolean {

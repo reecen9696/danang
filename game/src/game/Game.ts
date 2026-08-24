@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  RENDER, PHYS, WORLD_X, WORLD_Y, WORLD_Z, WATER_LEVEL, Mat, MATERIALS,
+  RENDER, PHYS, VITALS, WORLD_X, WORLD_Y, WORLD_Z, WATER_LEVEL, Mat, MATERIALS,
 } from '../core/constants';
 import { Input } from '../core/Input';
 import { BOTS } from '../ai/botTypes';
@@ -13,6 +13,9 @@ import { Renderer } from '../core/Renderer';
 import { makeAceFog } from '../core/fog';
 import { buildFlags } from '../fx/Flags';
 import { Farmers } from '../fx/Farmers';
+import { Rice } from '../fx/Rice';
+import { Townsfolk, Carry } from '../fx/Townsfolk';
+import { Ox } from '../fx/Ox';
 import { Sky } from '../fx/Sky';
 import { SunRig, makeShadowOnlyMaterial, ShadowQuality } from '../core/lighting';
 import { VoxelWorld } from '../voxel/VoxelWorld';
@@ -20,7 +23,7 @@ import { ChunkManager } from '../voxel/ChunkManager';
 import { generateWorld, prepareImportedMap, type MapLayout } from '../voxel/worldgen';
 import { loadVxlFromUrl } from '../voxel/vxl';
 import { raycastVoxels } from '../voxel/raycast';
-import { palette, AIR, BUILD_HUES, BUILD_SHADES, COL_CORE } from '../voxel/palette';
+import { palette, AIR, BUILD_HUES, BUILD_SHADES, COL_CORE, COL_SANDBAG, COL_STEEL } from '../voxel/palette';
 import { Player, type MoveIntent } from '../player/Player';
 import { Loadout, Slot, BUILDABLE } from '../player/Loadout';
 import { ViewModel } from '../player/ViewModel';
@@ -36,32 +39,93 @@ import { TracerSystem } from '../fx/Tracers';
 import { DecalSystem } from '../fx/Decals';
 import { BloodSystem } from '../fx/Blood';
 import { Economy, POINTS, ShopKind, ItemEffect, type ShopItem } from './Economy';
+import {
+  DeployableManager, DeployId, DEPLOYABLES, TURRET, occupies,
+  type AmmoCrate, type DeployDef, type Turret,
+} from './Deployables';
 import { WaveManager, Phase } from './WaveManager';
+import { BuildWheel } from '../ui/BuildWheel';
+import { Garrison } from './Garrison';
+import { visibilityOf } from '../ai/stealth';
+import { Aggression, Rage } from './Aggression';
+import { TunnelNetwork } from '../ai/TunnelNetwork';
 import { HUD } from '../ui/HUD';
 import { Minimap } from '../ui/Minimap';
 import { ShopUI } from '../ui/Shop';
-import { ClassMenu } from '../ui/ClassMenu';
-import { ClassId, classDef } from '../player/classes';
+import { ClassId } from '../player/classes';
 import { AudioEngine } from '../audio/Audio';
 import { Radio } from '../audio/Radio';
 import { Ambience } from '../audio/Ambience';
+import { VillageMusic } from '../audio/VillageMusic';
 import { Boombox, RadioButton } from '../fx/Boombox';
 import { VoiceDirector } from '../audio/Voices';
 import { VoiceCue } from '../audio/cues';
 
 const TOWN_SHOP_RADIUS = 4.5;
+/**
+ * Half-extents of the shelf the village stands on, in blocks. What counts as
+ * being in town, for the merchants and for the music alike.
+ */
+const TOWN_HALF_X = 26;
+const TOWN_HALF_Z = 22;
+
 /** How far away a radio button can still be pressed, in blocks. */
 const RADIO_REACH = 3.5;
 const REPAIR_HP_PER_BLOCK = 40;
+/** How far away a deployable can be stood, from the eye. */
+/**
+ * Seconds the build key must be held before the wheel opens.
+ *
+ * Short enough that reaching for it feels immediate, long enough that a normal
+ * tap — which is a few frames of key contact — never flashes a menu at you.
+ */
+const BUILD_WHEEL_HOLD = 0.17;
+
+const DEPLOY_REACH = 7;
+/** One quarter turn — the step Q and E rotate a deployable by. */
+const HALF_TURN = Math.PI / 2;
+/** Fraction of every reserve one pull from an ammo crate gives back. */
+const CRATE_FRACTION = 0.5;
 const REPAIR_RATE = 260;
 
-/** Opts meshes into both sides of the shadow pass. */
-function castAndReceive(...meshes: THREE.Mesh[]): void {
-  for (const m of meshes) {
-    m.castShadow = true;
-    m.receiveShadow = true;
-  }
-}
+/**
+ * How far a shot carries as something an enemy can act on, in blocks.
+ *
+ * Not a mixing decision -- this is the radius inside which firing gives your
+ * position away, and it is the price of every shot taken outside the wire. The
+ * rifle is the loudest thing the player owns and the pistol the quietest, which
+ * is the only reason to ever draw the pistol in the jungle.
+ */
+const GUN_NOISE: Partial<Record<WeaponId, number>> = {
+  [WeaponId.Pistol]: 34,
+  [WeaponId.SMG]: 46,
+  [WeaponId.Shotgun]: 58,
+  [WeaponId.Rifle]: 72,
+  [WeaponId.Rocket]: 90,
+  [WeaponId.MachineGun]: 84,
+  [WeaponId.Thumper]: 76,
+};
+
+/**
+ * The title-screen camera: a slow, high orbit of the spawn point.
+ *
+ * `height` over `radius` sets the tilt -- roughly 40 degrees down, which shows
+ * the fort's layout the way a map does while still keeping the walls standing
+ * up in frame rather than flattening them into a plan view.
+ */
+const PREVIEW = {
+  radius: 38,
+  height: 21,
+  targetLift: 4,
+  /** Radians per second. One full turn takes a little over three minutes. */
+  orbitSpeed: 0.03,
+  /** Where the orbit begins, so the first frame faces the town side. */
+  startAngle: Math.PI * 0.75,
+  /** Narrower than gameplay: less distortion at the frame edges. */
+  fov: 52,
+  /** The gameplay figure is tuned for eye level and hazes out an aerial shot. */
+  fogDistance: 130,
+} as const;
 
 /** Hermite ease used by AoS to blend the sprint state. */
 function smoothStep(x: number): number {
@@ -114,9 +178,17 @@ export class Game {
   readonly radio = new Radio(this.audio);
   /** Jungle bed, running under everything from the first frame of a run. */
   readonly ambience = new Ambience(this.audio);
+  /** The song over the market square, heard only when you're down there. */
+  readonly villageMusic = new VillageMusic(this.audio);
   private boombox: Boombox | null = null;
   /** The farmers out in the rice below the hill. Scenery, not actors. */
   private farmers: Farmers | null = null;
+  /** The crop they are working, and the wind in it. */
+  private rice: Rice | null = null;
+  /** The merchants and the villagers around them. Scenery, like the farmers. */
+  private townsfolk: Townsfolk | null = null;
+  /** The village buffalo, grazing the open ground by the west gate. */
+  private ox: Ox | null = null;
   /** Which of its buttons the player is looking at, or -1. */
   private aimedButton = -1;
   private readonly picker = new THREE.Raycaster();
@@ -129,6 +201,17 @@ export class Game {
    */
   private readonly navSeeds = [{ x: 0, z: 0 }, { x: 0, z: 0 }];
   private readonly navSeedsCoreOnly = [{ x: 0, z: 0 }];
+  /**
+   * The player alone. Handed to the flow field once the valley stops caring
+   * about the Core — see Aggression.huntsPlayer.
+   */
+  private readonly navSeedsPlayerOnly = [{ x: 0, z: 0 }];
+  /** The tunnels under the valley, and every mouth cut into them so far. */
+  private readonly tunnels = new TunnelNetwork();
+  /** What the valley thinks of the player. Drives the schedule and the horde. */
+  private readonly aggression = new Aggression();
+  /** Seconds until angered locals may send another party of rats after you. */
+  private hunterTimer = 0;
   private bots!: BotManager;
   private waves!: WaveManager;
   private projectiles!: ProjectileSystem;
@@ -140,11 +223,14 @@ export class Game {
   private readonly hud = new HUD();
   private readonly minimap: Minimap;
   private readonly shop: ShopUI;
-  private readonly classMenu = new ClassMenu();
   private readonly input: Input;
 
   private merchants: Merchant[] = [];
   private nearMerchant: Merchant | null = null;
+  /** Turrets, ammo crates and the placement ghost. */
+  private deployables!: DeployableManager;
+  /** The crate the player is standing next to, if any. */
+  private nearCrate: AmmoCrate | null = null;
 
   running = false;
   paused = false;
@@ -174,9 +260,26 @@ export class Game {
   /** Eases 0..1 while sprinting; drives the AoS sprint camera bob. */
   private sprintState = 0;
 
+  /** Title-screen flyover: see {@link startPreview}. */
+  private previewing = false;
+  private previewAngle = 0;
+  private previewLast = 0;
+  private readonly previewTarget = new THREE.Vector3();
+
+  /** Mans the jungle camps. Built with the bots, in init. */
+  private garrison: Garrison | null = null;
+  /**
+   * Seconds since the player last fired. A muzzle flash is the loudest thing
+   * about a man, and it is the one part of being seen he controls completely.
+   */
+  private sinceFired = 99;
+
   private showPerf = false;
   private perfTimer = 0;
   private respawnTimer = 0;
+  /** Seconds the build key has been held; past the threshold the wheel opens. */
+  private buildHold = 0;
+  private readonly buildWheel = new BuildWheel();
   private repairProgress = 0;
 
   onGameOver: ((stats: Record<string, number>) => void) | null = null;
@@ -217,7 +320,6 @@ export class Game {
     this.renderer.onResize(this.renderer.displayWidth, this.renderer.displayHeight);
 
     this.setupShop();
-    this.setupClassMenu();
   }
 
   // -------------------------------------------------------------------------
@@ -252,6 +354,14 @@ export class Game {
     }
     this.world.rebuildHeights();
 
+    // The network is already under the valley before anyone shoots at anyone:
+    // the mouths carved by worldgen become the ones the horde comes up out of,
+    // and the ones the player can go down.
+    this.tunnels.clear();
+    for (const h of this.layout.spiderHoles) {
+      this.tunnels.add(h.x, h.z, h.floorY, h.standX, h.y, h.standZ, false);
+    }
+
     onProgress(0.25, 'Building navigation…');
     await frame();
     this.nav = new NavGrid(this.world);
@@ -272,10 +382,28 @@ export class Game {
     if (this.layout.flagSites.length > 0) {
       this.scene.add(buildFlags(this.layout.flagSites));
     }
-    // The village working the paddy below the hill. Client-side scenery, like
-    // the flags: nothing here collides, takes damage or reaches the server.
+    // The standing crop. Scenery for the same reason the flags are -- it is
+    // finer than the grid and nothing should be able to stand on it -- but it
+    // is the one piece of scenery in the map that changes a fight: get down in
+    // a grown plot and the men crossing the field lose you (ai/BotManager).
+    this.rice = new Rice(this.layout.ricePatches);
+    this.scene.add(this.rice.mesh);
+    // The village working the paddy below the hill. Client-side, like the
+    // flags: nothing here collides or reaches the server. They can be shot,
+    // and they run from anything that goes off near them, but that is resolved
+    // entirely on this machine -- in multiplayer everyone's field empties on
+    // their own screen, which is close enough for scenery.
     this.farmers = new Farmers({
       onStrike: (x, y, z) => this.mudSplash(x, y, z),
+      // Half the field has a voice, and which voice it is follows the body:
+      // the grown ones scream and the children scream like children. The
+      // stagger is there because a field going up is not a chorus -- everyone
+      // breaks a beat apart, and simultaneous cries read as one sample.
+      onScream: (x, y, z, child) => this.audio.play(
+        child ? 'scream-child' : 'scream-woman',
+        this.distanceToPlayer(x, y, z),
+        { delay: Math.random() * 0.22 },
+      ),
     });
     this.scene.add(this.farmers.mesh);
 
@@ -302,11 +430,21 @@ export class Game {
       onFire: (bot, tx, ty, tz) => this.botFire(bot, tx, ty, tz),
       onBreach: (bot, x, y, z) => this.botBreach(bot, x, y, z),
       onBuild: (bot, x, y, z, color, mat) => this.botBuild(bot, x, y, z, color, mat),
+      onDig: (bot, x, y, z) => this.botDig(bot, x, y, z),
+      onSpoil: (bot, x, y, z, strength) => this.spawnSpoil(bot, x, y, z, strength),
       onDeath: (bot) => this.onBotDeath(bot),
       onCorpseRest: (bot) => this.onCorpseRest(bot),
       onVoice: (bot, cue) => this.botVoice(bot, cue),
+      tunnels: this.tunnels,
+      aggression: 0,
+      // Rewritten every frame by updateStealth. One is a man walking upright
+      // in the open; everything the player can do about being seen moves it.
+      playerVisibility: 1,
     });
     this.scene.add(this.bots.mesh);
+    this.garrison = new Garrison(this.bots);
+
+    this.deployables = new DeployableManager(this.scene, this.world);
 
     this.waves = new WaveManager(this.bots, this.layout.spawnPoints, {
       onPhaseChange: (phase, wave) => this.onPhaseChange(phase, wave),
@@ -315,7 +453,7 @@ export class Game {
         this.hud.log(t, tone);
       },
       onWaveCleared: (wave) => this.onWaveCleared(wave),
-    });
+    }, this.aggression);
 
     this.buildScenery();
 
@@ -352,6 +490,18 @@ export class Game {
 
   get isMultiplayer(): boolean {
     return this.net !== null;
+  }
+
+  /**
+   * Who is in the room, for the title screen's player list.
+   *
+   * Null means there is no server on this build -- which is not the same as an
+   * empty room, and the lobby says so rather than showing nobody online.
+   */
+  lobbyRoster(): { name: string; you: boolean }[] | null {
+    if (!this.net) return null;
+    const me = this.net.sessionId;
+    return this.net.allPlayers().map((p) => ({ name: p.name, you: p.sessionId === me }));
   }
 
   /** Server-side announcement — same treatment as a local wave callout. */
@@ -533,33 +683,72 @@ export class Game {
     water.renderOrder = 1;
     this.scene.add(water);
 
-    // Merchants: a body box each, standing behind their counters.
-    const merchantDefs: { kind: ShopKind; name: string; color: number }[] = [
-      { kind: ShopKind.Weapons, name: 'WEAPON MERCHANT', color: 0x9a3b2f },
-      { kind: ShopKind.Materials, name: 'MATERIALS MERCHANT', color: 0x2f6b9a },
+    // The merchants, and the rest of the village around them.
+    //
+    // Order matches the order the stalls are laid down the market street, so
+    // which trade you find on which side of it is fixed by the map rather than
+    // by whatever this loop happens to do.
+    const merchantDefs: { kind: ShopKind; name: string; shirt: number }[] = [
+      { kind: ShopKind.Weapons, name: 'WEAPON MERCHANT', shirt: 0x8f3a2e },
+      { kind: ShopKind.Materials, name: 'MATERIALS MERCHANT', shirt: 0x2f5f86 },
+      { kind: ShopKind.Defense, name: 'DEFENSE MERCHANT', shirt: 0x7d6f2c },
+      { kind: ShopKind.Utility, name: 'UTILITY MERCHANT', shirt: 0x3f7a39 },
     ];
 
-    const geom = new THREE.BoxGeometry(1, 1, 1);
+    // Same deal as the paddy: shootable, panicky, and entirely client-side.
+    // The village has the same two voices the field has, and for the same
+    // reason -- the person who cries out should sound like the person who was
+    // shot at, not like a stock panic sample.
+    this.townsfolk = new Townsfolk(merchantDefs.length + 10, {
+      onScream: (x, y, z, child) => this.audio.play(
+        child ? 'scream-child' : 'scream-woman',
+        this.distanceToPlayer(x, y, z),
+        { delay: Math.random() * 0.22 },
+      ),
+    });
+    this.scene.add(this.townsfolk.mesh);
+
     this.layout.merchantSpots.forEach((spot, i) => {
       const def = merchantDefs[i % merchantDefs.length];
-      const g = new THREE.Group();
-      const body = new THREE.Mesh(geom, new THREE.MeshLambertMaterial({ color: def.color, fog: true }));
-      body.position.set(0, 1.0, 0);
-      body.scale.set(0.9, 1.4, 0.6);
-      const head = new THREE.Mesh(geom, new THREE.MeshLambertMaterial({ color: 0xc9a077, fog: true }));
-      head.position.set(0, 2.05, 0);
-      head.scale.setScalar(0.62);
-      castAndReceive(body, head);
-      g.add(body, head);
-      g.position.set(spot.x, spot.y, spot.z - 1.2);
-      this.scene.add(g);
-
+      this.townsfolk!.add({
+        x: spot.x, y: spot.y, z: spot.z, yaw: spot.yaw,
+        shirt: def.shirt, pose: 'counter', hat: i % 2 === 0,
+        // The merchants are the shop. Rounds go through them and a panic goes
+        // past them, because a stall you cannot buy from because you shot the
+        // man behind it is a softlock rather than a consequence.
+        killable: false,
+      });
       this.merchants.push({
         kind: def.kind,
         name: def.name,
         position: new THREE.Vector3(spot.x, spot.y, spot.z),
       });
     });
+
+    // Everyone else: they live here, so some of them are stood in their own
+    // yards and some are walking the street between the stalls.
+    const town = this.layout.townCenter;
+    this.layout.villagerSpots.forEach((spot, i) => {
+      const walker = i % 3 === 0;
+      this.townsfolk!.add({
+        x: spot.x, y: spot.y, z: spot.z,
+        yaw: Math.atan2(town.x - spot.x, town.z - spot.z),
+        scale: i % 5 === 4 ? 0.55 : 1,
+        carry: walker ? Carry.Pole : (i % 4 === 1 ? Carry.Basket : Carry.None),
+        wander: walker
+          ? { x0: town.x - 20, z0: town.z - 2, x1: town.x + 20, z1: town.z + 2 }
+          : undefined,
+      });
+    });
+
+    // The buffalo, on the open grass inside the west gate -- the first thing
+    // you walk past coming up the road, and the only thing in the village that
+    // has no idea there is a war on.
+    this.ox = new Ox({
+      x: town.x - 18, y: town.y, z: town.z + 3,
+      pasture: { x0: town.x - 23, z0: town.z - 6, x1: town.x - 13, z1: town.z + 6 },
+    });
+    this.scene.add(this.ox.mesh);
 
     this.placeBoombox();
 
@@ -573,27 +762,6 @@ export class Game {
     this.playerShadowCaster.receiveShadow = false;
     this.playerShadowCaster.frustumCulled = false;
     this.scene.add(this.playerShadowCaster);
-
-    // Utility merchant shares the plaza.
-    const util = this.layout.merchantSpots[0];
-    if (util) {
-      const g = new THREE.Group();
-      const body = new THREE.Mesh(geom, new THREE.MeshLambertMaterial({ color: 0x4a8a3f, fog: true }));
-      body.position.set(0, 1.0, 0);
-      body.scale.set(0.9, 1.4, 0.6);
-      const head = new THREE.Mesh(geom, new THREE.MeshLambertMaterial({ color: 0xc9a077, fog: true }));
-      head.position.set(0, 2.05, 0);
-      head.scale.setScalar(0.62);
-      castAndReceive(body, head);
-      g.add(body, head);
-      g.position.set(this.layout.townCenter.x, util.y, this.layout.townCenter.z + 5);
-      this.scene.add(g);
-      this.merchants.push({
-        kind: ShopKind.Utility,
-        name: 'UTILITY MERCHANT',
-        position: new THREE.Vector3(this.layout.townCenter.x, util.y, this.layout.townCenter.z + 5),
-      });
-    }
 
   }
 
@@ -661,43 +829,123 @@ export class Game {
       if (item.effect === ItemEffect.GiveBlocks && item.material !== undefined) {
         return `You have ${this.loadout.blocks[item.material]}`;
       }
-      if (item.effect === ItemEffect.ExtraLife) return `You have ${this.loadout.tickets}`;
-      if (item.effect === ItemEffect.MaxHealth) return `Max HP ${this.player.maxHp}`;
+      if (item.effect === ItemEffect.GiveDeployable && item.deployable !== undefined) {
+        const carried = this.loadout.deployStock(item.deployable);
+        const out = this.deployables.countOf(item.deployable);
+        const cap = DEPLOYABLES[item.deployable].maxPlaced;
+        return out > 0 && cap !== Infinity
+          ? `Carrying ${carried} · ${out}/${cap} deployed`
+          : `Carrying ${carried}`;
+      }
+      if (item.effect === ItemEffect.TurretAmmo) {
+        return `${this.deployables.turrets.length} sentries out`;
+      }
+      if (item.effect === ItemEffect.RefillAmmo || item.effect === ItemEffect.AmmoBox) {
+        const w = this.loadout.gun;
+        return `${w.def.name} reserve ${w.stock}/${w.capacity}`;
+      }
+      if (item.effect === ItemEffect.Toughness) {
+        const extra = Math.round(this.player.maxHp - VITALS.pool);
+        return extra > 0 ? `+${extra}% tougher than issue` : 'Standard issue';
+      }
       return null;
     };
   }
 
-  private setupClassMenu(): void {
-    this.classMenu.onPick = (id) => this.selectClass(id);
-    this.classMenu.onClose = () => {
-      this.input.uiCapture = false;
-      if (this.running && !this.paused) this.input.requestLock();
-    };
-  }
-
   /**
-   * The picker frees the pointer but deliberately does *not* pause: opening it
-   * mid-wave is a real risk, which is the whole cost of switching class.
+   * The class pick, made on the title screen before the run exists: no rack
+   * sound and no HUD line, because there is no audio context and no HUD to
+   * write to yet. It is the only place the class is chosen -- you drop in with
+   * the gun you picked and that is the gun you fight the run with.
    */
-  private openClassMenu(): void {
-    if (this.classMenu.open) return;
-    this.input.uiCapture = true;
-    this.input.exitLock();
-    this.classMenu.show(this.loadout.classId);
-  }
-
-  private selectClass(id: ClassId): void {
+  chooseClass(id: ClassId): void {
     if (!this.loadout.setClass(id)) return;
     this.viewModel.select(this.loadout.activeWeapon.id);
-    this.audio.play('rack');
-    this.hud.log(`Class: ${classDef(id).name}`, 'info');
   }
+
+  get classId(): ClassId {
+    return this.loadout.classId;
+  }
+
+  // -------------------------------------------------------------------------
+  // Menu preview
+  // -------------------------------------------------------------------------
+  /**
+   * Slow aerial orbit of the base, rendered behind the title screen.
+   *
+   * It reuses the run's own scene and camera rather than a second render
+   * target: nothing here simulates, so the cost is one draw of terrain the
+   * boot sequence has already meshed. Fog is pushed back for the duration --
+   * the gameplay figure is tuned for eye level and would bury a shot taken
+   * from thirty blocks up in haze.
+   */
+  startPreview(): void {
+    if (this.previewing || this.running) return;
+    this.previewing = true;
+    this.previewAngle = PREVIEW.startAngle;
+    this.previewLast = performance.now();
+    (this.scene.fog as THREE.Fog).far = PREVIEW.fogDistance;
+    this.camera.fov = PREVIEW.fov;
+    this.camera.updateProjectionMatrix();
+    requestAnimationFrame(this.previewLoop);
+  }
+
+  /** Hands the camera and the fog back to the run. */
+  stopPreview(): void {
+    if (!this.previewing) return;
+    this.previewing = false;
+    (this.scene.fog as THREE.Fog).far = RENDER.fogDistance;
+    this.camera.fov = RENDER.fov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  private readonly previewLoop = (now: number): void => {
+    if (!this.previewing) return;
+    requestAnimationFrame(this.previewLoop);
+
+    const frameStart = performance.now();
+    let dt = (now - this.previewLast) / 1000;
+    this.previewLast = now;
+    if (dt > 0.1) dt = 0.1;
+
+    this.previewAngle += dt * PREVIEW.orbitSpeed;
+
+    // Look at the spawn point itself, a little above the deck so the core and
+    // the walls around it sit in frame rather than the dirt in front of them.
+    const spawn = this.layout.playerSpawn;
+    const target = this.previewTarget.set(spawn.x, spawn.y + PREVIEW.targetLift, spawn.z);
+    this.camera.position.set(
+      target.x + Math.sin(this.previewAngle) * PREVIEW.radius,
+      target.y + PREVIEW.height,
+      target.z + Math.cos(this.previewAngle) * PREVIEW.radius,
+    );
+    this.camera.lookAt(target);
+
+    // The village keeps working while you read the controls; it's the only
+    // thing on screen that moves, and a still frame reads as a screenshot.
+    this.farmers?.update(dt);
+    this.rice?.update(dt);
+    this.townsfolk?.update(dt, this.camera.position.x, this.camera.position.y, this.camera.position.z);
+    this.ox?.update(dt);
+    this.chunks.setFocus(this.camera.position);
+    this.chunks.update();
+
+    this.sun.update(this.previewTarget);
+    this.sky?.update(this.camera.position);
+
+    const r = this.renderer.renderer;
+    r.info.reset();
+    r.clear();
+    r.render(this.scene, this.camera);
+
+    this.renderer.sample(performance.now() - frameStart);
+  };
 
   // -------------------------------------------------------------------------
   // Run control
   // -------------------------------------------------------------------------
   start(): void {
-    this.classMenu.close();
+    this.stopPreview();
     this.resetRun();
     this.running = true;
     this.paused = false;
@@ -706,7 +954,10 @@ export class Game {
     this.ambience.start();
     this.input.requestLock();
     this.hud.setVisible(true);
+    this.aggression.reset();
+    this.hunterTimer = 60;
     this.waves.startRun();
+    this.manOutposts();
     requestAnimationFrame(this.loop);
   }
 
@@ -723,6 +974,10 @@ export class Game {
     this.particles.clear();
     this.tracers.clear();
     this.blood.clear();
+    this.deployables.clear();
+    this.loadout.clearDeployables();
+    this.farmers?.respawn();
+    this.townsfolk?.respawn();
     this.player.maxHp = 100;
     this.player.respawn(this.layout.playerSpawn.x, this.layout.playerSpawn.y + 1, this.layout.playerSpawn.z);
     this.player.yaw = Math.PI * 0.75;
@@ -730,10 +985,57 @@ export class Game {
     this.viewModel.select(this.loadout.activeWeapon.id);
   }
 
+  /**
+   * Posts men at every jungle camp that is short of them.
+   *
+   * Single-player only. In multiplayer the horde is the server's, and a client
+   * spawning its own garrison would be spawning men nobody else can see and the
+   * server would sweep back out from under it on the next snapshot.
+   */
+  private manOutposts(): void {
+    if (this.net || !this.garrison) return;
+    const posted = this.garrison.reinforce(this.layout.outposts, Math.max(1, this.waves.wave));
+    if (posted > 0) this.hud.log('Movement reported in the treeline', 'warn');
+  }
+
+  /**
+   * How readable the player is this frame, and how close anyone is to acting
+   * on it.
+   *
+   * The whole stealth system meets the rest of the game here: one number goes
+   * out to the horde, one comes back for the HUD. Everything in between --
+   * stance, speed, muzzle flash, who is facing which way -- is ai/stealth.ts
+   * and BotManager's perception.
+   */
+  private updateStealth(dt: number): void {
+    this.sinceFired += dt;
+
+    const p = this.player;
+    const ctx = (this.bots as unknown as { ctx: { playerVisibility?: number } }).ctx;
+    ctx.playerVisibility = visibilityOf({
+      speed: Math.hypot(p.velocity.x, p.velocity.z) * PHYS.velocityScale,
+      sprinting: p.sprinting,
+      crouching: p.crouching,
+      sneaking: this.intent.sneak,
+      sinceFired: this.sinceFired,
+    });
+
+    // Footfalls. Sneaking is silent, walking barely carries, and running
+    // through the trees is the second loudest thing the player can do.
+    if (!this.intent.sneak && !p.airborne) {
+      const noise = p.sprinting ? 15 : 8;
+      if (Math.hypot(p.velocity.x, p.velocity.z) * PHYS.velocityScale > 2) {
+        this.bots.hearNoise(p.position.x, p.position.z, noise, dt * 0.5);
+      }
+    }
+
+    const { level, spotted } = this.bots.detection;
+    this.hud.setDetection(level, spotted);
+  }
+
   setPaused(on: boolean): void {
     this.paused = on;
     if (on) {
-      this.classMenu.close();
       this.input.exitLock();
     } else {
       this.lastTime = performance.now();
@@ -765,13 +1067,16 @@ export class Game {
   };
 
   private update(dt: number): void {
-    this.handleHotkeys();
+    this.handleHotkeys(dt);
 
     if (this.player.alive) {
       this.updateLook();
       this.buildIntent();
       this.player.update(dt, this.intent);
-      this.handleActions(dt);
+      // Movement carries on while the wheel is up — you should be able to keep
+      // running for cover while you pick — but the trigger does not, or every
+      // flick of the mouse would also be a shot fired at the floor.
+      if (!this.buildWheel.open) this.handleActions(dt);
     } else {
       this.respawnTimer -= dt;
       if (this.respawnTimer <= 0) this.doRespawn();
@@ -779,19 +1084,34 @@ export class Game {
 
     this.loadout.update(dt, (w) => this.onReloadStep(w));
 
+    this.aggression.update(dt);
+    this.updateHunters(dt);
+
     // Keep the bot context in sync with the player.
-    const ctx = (this.bots as unknown as { ctx: { playerEyeY: number; playerAlive: boolean } }).ctx;
+    const ctx = (this.bots as unknown as {
+      ctx: { playerEyeY: number; playerAlive: boolean; aggression: number };
+    }).ctx;
     ctx.playerEyeY = this.player.eyeY;
     ctx.playerAlive = this.player.alive && this.player.invulnerable <= 0;
+    ctx.aggression = this.aggression.value;
 
     // The flow field is seeded on both objectives, so bots route at whichever of
     // the core and the player is cheaper to reach rather than always funnelling
     // to one point. Seeds are cheap; only the rebuild inside nav.update costs.
+    //
+    // Past a certain amount of anger the Core comes off the list entirely. That
+    // is the whole of "they hunt you down": the field stops describing a route
+    // to your base and starts describing a route to you, and every man on the
+    // map is reading it.
     this.navSeeds[0].x = this.navSeedsCoreOnly[0].x = this.layout.baseCenter.x;
     this.navSeeds[0].z = this.navSeedsCoreOnly[0].z = this.layout.baseCenter.z;
-    this.navSeeds[1].x = this.player.position.x;
-    this.navSeeds[1].z = this.player.position.z;
-    this.nav.setSeeds(this.player.alive ? this.navSeeds : this.navSeedsCoreOnly);
+    this.navSeeds[1].x = this.navSeedsPlayerOnly[0].x = this.player.position.x;
+    this.navSeeds[1].z = this.navSeedsPlayerOnly[0].z = this.player.position.z;
+    this.nav.setSeeds(
+      !this.player.alive ? this.navSeedsCoreOnly
+        : this.aggression.huntsPlayer ? this.navSeedsPlayerOnly
+          : this.navSeeds,
+    );
 
     if (this.net) {
       // Server-authoritative: no local AI, no local wave clock. Bots and the
@@ -807,7 +1127,11 @@ export class Game {
     }
     this.voices.update(dt);
     this.updateRadio(dt);
+    // The village's own song, which is there because the village is, not
+    // because anyone switched it on.
+    this.villageMusic.setListener(this.distanceOutsideTown(), dt);
     this.farmers?.update(dt);
+    this.rice?.update(dt);
     this.projectiles.update(dt);
     this.particles.update(dt);
     this.tracers.update(dt);
@@ -815,11 +1139,25 @@ export class Game {
     this.blood.update(dt);
     if (!this.net) this.waves.update(dt);
 
+    // Sentries fire on their own clock, in single-player and in multiplayer
+    // alike: they're local kit, like the blocks you place, and the damage they
+    // do is reported the same way a bullet of yours is.
+    this.deployables.update(dt, this.bots, (t, target, muzzle) => this.turretFire(t, target, muzzle), tmpVec2);
+    this.updateDeployGhost();
+
     this.chunks.setFocus(this.player.position);
     this.chunks.update();
 
+    // The village watches you walk through it, so it needs to know where you
+    // are before the camera moves.
+    this.townsfolk?.update(
+      dt, this.player.position.x, this.player.position.y, this.player.position.z,
+    );
+    this.ox?.update(dt);
+
     this.updateCamera(dt);
     this.updateMerchantPrompt();
+    this.updateStealth(dt);
     this.updateHud(dt);
 
     this.minimap.update(
@@ -877,7 +1215,7 @@ export class Game {
   // -------------------------------------------------------------------------
   // Input
   // -------------------------------------------------------------------------
-  private handleHotkeys(): void {
+  private handleHotkeys(dt: number): void {
     const inp = this.input;
 
     if (inp.wasPressed('F3')) {
@@ -892,34 +1230,44 @@ export class Game {
       );
     }
 
+    // A menu, a pause or a death closes the wheel outright: it is a thing you
+    // are holding a key down for, and none of those states are ones you are
+    // still holding a key down through.
+    if (this.buildWheel.open && (this.shop.open || this.menuOpen || !this.player.alive)) {
+      this.buildWheel.hide();
+      this.buildHold = 0;
+    }
+
     if (this.shop.open) {
       if (inp.wasPressed('Escape') || inp.wasPressed('KeyE') || inp.wasPressed('KeyB')) this.shop.close();
       return;
     }
 
-    if (this.classMenu.open) {
-      if (inp.wasPressed('Tab') || inp.wasPressed('Escape')) this.classMenu.close();
-      return;
-    }
-    if (inp.wasPressed('Tab')) { this.openClassMenu(); return; }
-
-    if (inp.wasPressed('Digit1')) this.selectSlot(Slot.Spade);
-    if (inp.wasPressed('Digit2')) this.selectSlot(Slot.Block);
-    if (inp.wasPressed('Digit3')) {
+    // Gun on 1. Everything else is a tool, and a tool is something you go and
+    // get; the gun is something you should already be holding.
+    if (inp.wasPressed('Digit1')) {
       if (this.loadout.slot === Slot.Gun) { this.loadout.cycleGun(1); this.audio.play('rack'); }
       this.selectSlot(Slot.Gun);
     }
+    if (inp.wasPressed('Digit2')) this.selectSlot(Slot.Spade);
+    if (inp.wasPressed('Digit3')) this.selectSlot(Slot.Block);
     if (inp.wasPressed('Digit4')) this.selectSlot(Slot.Grenade);
+    this.updateBuildKey(dt);
 
     if (inp.wasPressed('KeyR')) {
       const w = this.loadout.activeWeapon;
       if (w.beginReload()) this.playReload(w);
     }
 
-    if (inp.wasPressed('KeyQ')) this.loadout.cycleMaterial(1);
+    if (inp.wasPressed('KeyQ')) {
+      if (this.loadout.slot === Slot.Build) this.rotateDeploy(-1);
+      else this.loadout.cycleMaterial(1);
+    }
     if (inp.wheelDelta !== 0) {
-      if (this.loadout.slot === Slot.Block) this.loadout.cycleMaterial(inp.wheelDelta > 0 ? 1 : -1);
-      else { this.loadout.cycleGun(inp.wheelDelta > 0 ? 1 : -1); this.audio.play('rack'); }
+      const dir = inp.wheelDelta > 0 ? 1 : -1;
+      if (this.loadout.slot === Slot.Block) this.loadout.cycleMaterial(dir);
+      else if (this.loadout.slot === Slot.Build) this.loadout.cycleDeployable(dir);
+      else { this.loadout.cycleGun(dir); this.audio.play('rack'); }
     }
 
     // Colour palette (AoS-style arrow-key cycling).
@@ -933,7 +1281,85 @@ export class Game {
       this.selectSlot(Slot.Grenade);
     }
 
-    if (inp.wasPressed('KeyE') || inp.wasPressed('KeyB')) this.interact();
+    if (inp.wasPressed('KeyE') || inp.wasPressed('KeyB')) {
+      // E rotates while you're holding something to place -- but anything you
+      // could actually press E *on* still wins, and the prompt says which it
+      // is, so standing at a merchant never leaves you unable to open it.
+      if (this.loadout.slot === Slot.Build && inp.wasPressed('KeyE')
+        && this.loadout.deployStock(this.loadout.deploySelected) > 0
+        && !this.hasInteractTarget()) {
+        this.rotateDeploy(1);
+      } else {
+        this.interact();
+      }
+    }
+  }
+
+  /**
+   * The build key: tap to equip, hold to choose.
+   *
+   * The split is what makes one key do both jobs without either getting in the
+   * other's way. A tap is the fast path — put down another of whatever I was
+   * putting down — and never shows a menu. Past the hold threshold the wheel
+   * opens and the key becomes a modifier: mouse movement is steering the
+   * picker rather than the player, and letting go commits.
+   */
+  private updateBuildKey(dt: number): void {
+    const inp = this.input;
+    const held = inp.isDown('Digit5');
+
+    if (inp.wasPressed('Digit5')) {
+      this.buildHold = 0;
+      this.selectSlot(Slot.Build);
+    }
+
+    if (held && !this.buildWheel.open) {
+      this.buildHold += dt;
+      if (this.buildHold >= BUILD_WHEEL_HOLD) {
+        this.buildWheel.show(this.loadout);
+        this.audio.play('rack');
+      }
+    }
+
+    if (this.buildWheel.open) {
+      // The wheel eats the mouse while it's up. Zeroing the deltas here rather
+      // than gating updateLook keeps the ownership in one place: whoever
+      // consumes the movement is responsible for spending it.
+      this.buildWheel.move(inp.mouseDX, inp.mouseDY);
+      inp.mouseDX = 0;
+      inp.mouseDY = 0;
+    }
+
+    if (!inp.wasReleased('Digit5')) return;
+
+    const picked = this.buildWheel.open ? this.buildWheel.highlighted : null;
+    this.buildWheel.hide();
+    this.buildHold = 0;
+    if (picked === null) return;
+
+    this.loadout.deploySelected = picked;
+    this.selectSlot(Slot.Build);
+    this.audio.play('rack');
+    if (this.loadout.deployStock(picked) === 0) {
+      this.hud.log(`No ${DEPLOYABLES[picked].name.toLowerCase()} — buy one at a merchant`, 'warn');
+    }
+  }
+
+  /**
+   * Is E currently pointed at something? Rotation only takes the key if not.
+   *
+   * With a deployable in hand E is a rotate key, so anything E can interact
+   * with has to be something you are actually standing at or aiming into.
+   */
+  private hasInteractTarget(): boolean {
+    if (this.shop.open) return true;
+    if (this.aimedButton >= 0) return true;
+    return Boolean(this.nearCrate || this.nearMerchant);
+  }
+
+  private rotateDeploy(dir: number): void {
+    this.loadout.rotateDeployable(dir);
+    this.audio.play('rack');
   }
 
   private selectSlot(slot: Slot): void {
@@ -1007,7 +1433,7 @@ export class Game {
   // Player actions
   // -------------------------------------------------------------------------
   private handleActions(dt: number): void {
-    if (this.shop.open || this.classMenu.open || !this.input.locked) return;
+    if (this.shop.open || !this.input.locked) return;
     const inp = this.input;
     const loadout = this.loadout;
 
@@ -1031,6 +1457,10 @@ export class Game {
 
       case Slot.Grenade:
         if (inp.mouseLeftPressed) this.throwGrenade();
+        break;
+
+      case Slot.Build:
+        if (inp.mouseLeftPressed) this.placeDeployable();
         break;
     }
   }
@@ -1196,8 +1626,16 @@ export class Game {
     if (!w.consume()) return;
 
     this.stats.shotsFired++;
+    this.sinceFired = 0;
     this.viewModel.fire(w.def.recoil[0], w.def.muzzleFlash);
     this.audio.play(w.def.sound);
+    // The shot carries a great deal further than the flash does. This is the
+    // one thing that reaches through terrain, which is what stops the answer
+    // to every camp being "shoot it from the trees and stay hidden".
+    this.bots.hearNoise(
+      this.player.position.x, this.player.position.z,
+      GUN_NOISE[w.id] ?? 46, 0.55,
+    );
     // Bolt-action and pump guns cycle between shots.
     if (w.def.cycle) this.audio.play(w.def.cycle, 0, { delay: Math.min(0.18, w.def.delay * 0.4) });
 
@@ -1257,8 +1695,8 @@ export class Game {
   // Combat resolution
   // -------------------------------------------------------------------------
   /**
-   * Traces one bullet against both bots and voxels, applying damage to
-   * whichever is closer. Shared by the player and every bot.
+   * Traces one bullet against bots, the people in the paddy and voxels,
+   * applying damage to whichever is closer. Shared by the player and every bot.
    */
   private hitscan(
     ox: number, oy: number, oz: number,
@@ -1273,6 +1711,7 @@ export class Game {
     const voxDist = vox.hit ? vox.distance : range;
 
     let hitBot = false;
+    let hitCivilian = false;
     let killed = false;
     let endX = ox + dx * voxDist;
     let endY = oy + dy * voxDist;
@@ -1299,9 +1738,43 @@ export class Game {
         );
         hitBot = true;
       }
+
+      // Civilians are tested last and only by a round that hit nothing else.
+      // The field is behind the enemy from the parapet and the market is off
+      // to the side of them, so anyone here was found by a round that missed
+      // whatever it was aimed at -- which is exactly the round that ought to
+      // be able to find them.
+      if (!hitBot) {
+        const field = this.farmers?.raycast(ox, oy, oz, dx, dy, dz, voxDist) ?? null;
+        const street = this.townsfolk?.raycast(ox, oy, oz, dx, dy, dz, voxDist) ?? null;
+        // Whichever of the two is nearer takes it, so a villager standing
+        // behind a farmer is covered by them the way you would expect.
+        const inField = field !== null && (street === null || field.distance <= street.distance);
+        const hit = inField ? field! : street;
+        if (hit) {
+          endX = ox + dx * hit.distance;
+          endY = oy + dy * hit.distance;
+          endZ = oz + dz * hit.distance;
+          const dmg = Math.round(damage[HitZone.Torso] * damageMultiplier);
+          const died = inField
+            ? this.farmers!.hit(field!, dmg, ox, oz)
+            : this.townsfolk!.hit(street!, dmg, ox, oz);
+          this.civilianShot(died, hit.scale, endX, endY, endZ, dx, dz);
+          hitCivilian = true;
+        }
+      }
     }
 
-    if (!hitBot && vox.hit) {
+    // A round going anywhere near the field puts the whole of it to flight,
+    // whether or not it was aimed at anybody in it. Shooting over their heads
+    // is not free either, just cheap.
+    if (!hostile) {
+      const scared = (this.farmers?.alarm(endX, endZ, 26) ?? 0)
+        + (this.townsfolk?.alarm(endX, endZ, 26) ?? 0);
+      if (scared > 0) this.onRageCrossed(this.aggression.civiliansScared());
+    }
+
+    if (!hitBot && !hitCivilian && vox.hit) {
       this.damageBlock(vox.x, vox.y, vox.z, blockDamage * damageMultiplier, hostile);
       // Impact puff in the surface colour.
       const color = this.world.get(vox.x, vox.y, vox.z);
@@ -1387,6 +1860,100 @@ export class Game {
     return killed;
   }
 
+  /**
+   * A round has found a civilian -- in the paddy or in the market, it is the
+   * same round and the same crime, so it is the same code.
+   *
+   * Nothing is scored for it and nothing is announced beyond a line in the
+   * log: shooting one of them is not a kill, it is a thing that happened, and
+   * the game's only comment on it is that the place empties and stays empty
+   * until the next morning.
+   */
+  private civilianShot(
+    killed: boolean, s: number,
+    x: number, y: number, z: number,
+    dirX: number, dirZ: number,
+  ): void {
+    for (let i = 0; i < (killed ? 18 : 8); i++) {
+      this.particles.spawn(
+        x, y, z,
+        dirX * 5 + (Math.random() - 0.5) * 6,
+        Math.random() * 4,
+        dirZ * 5 + (Math.random() - 0.5) * 6,
+        0.5, 0.05, 0.05, 0.95, 0.6 + Math.random() * 0.6, 0.4 + Math.random() * 0.35,
+        24, 0.8, true,
+      );
+    }
+    this.blood.spatter(x, y, z, killed ? 3 : 2, killed ? 1.2 * s : 0.8 * s);
+
+    if (killed) {
+      this.blood.pool(x, y - 0.9, z, 1.2 * s + Math.random() * 0.4, CORPSE_LIFE + 14);
+      // Pitched up for the smaller bodies, which is the whole of what the game
+      // says about who was out there.
+      this.audio.play('death-cry', this.distanceToPlayer(x, y, z), { rate: s < 0.7 ? 1.5 : 1.05 });
+      this.hud.log(`Civilian killed  (${this.aggression.civiliansKilled})`, 'bad');
+      this.onRageCrossed(this.aggression.civilianKilled());
+      // Somebody runs and somebody talks. A party goes into the ground for you
+      // before the next raid is due.
+      this.hunterTimer = Math.min(this.hunterTimer, 12);
+    } else {
+      this.audio.play('hit', this.distanceToPlayer(x, y, z));
+      this.onRageCrossed(this.aggression.civilianWounded());
+    }
+  }
+
+  /**
+   * Announces a step up in how the valley is taking this.
+   *
+   * Only the crossings are announced, never the number: the player should feel
+   * the game change under them and be told why, not be handed a meter to
+   * optimise against.
+   */
+  private onRageCrossed(level: number): void {
+    switch (level) {
+      case Rage.Roused:
+        // No banner for the first step up -- it arrives as a line in the log
+        // and as men who are harder to shake, which is how the player ought to
+        // notice it. The louder two still get the screen.
+        this.hud.log('The village has seen what you are doing.', 'bad');
+        break;
+      case Rage.Angry:
+        this.hud.showAnnounce('THEY ARE COMING FOR YOU', 'bad');
+        this.hud.log('They have stopped caring about the Core.', 'bad');
+        break;
+      case Rage.Hunting:
+        this.hud.showAnnounce('THE GROUND IS THEIRS', 'bad');
+        this.hud.log('Watch the earth. They are under it.', 'bad');
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Sends parties of tunnel rats after the player between raids.
+   *
+   * This is the part of the anger the player meets first, and it is deliberately
+   * off the schedule: a raid you can see coming is a fight, but four men coming
+   * up out of the paddy while you are at the merchant is a consequence.
+   */
+  private updateHunters(dt: number): void {
+    if (this.waves.phase === Phase.GameOver) return;
+    const rage = this.aggression.value;
+    if (rage < 0.25) return;
+
+    this.hunterTimer -= dt;
+    if (this.hunterTimer > 0) return;
+
+    const party = 1 + Math.floor(rage * 4);
+    const sent = this.waves.sendHunters(party);
+    // Angrier means sooner. At the top of the scale it's most of a minute.
+    this.hunterTimer = (95 - rage * 45) * (0.75 + Math.random() * 0.5);
+    if (sent > 0 && this.aggression.huntsPlayer) {
+      this.hud.log('Something is moving under the field.', 'warn');
+    }
+  }
+
   private damageBlock(x: number, y: number, z: number, amount: number, hostile: boolean): void {
     const isCore = this.world.materialAt(x, y, z) === Mat.Core;
     const color = this.world.get(x, y, z);
@@ -1467,6 +2034,54 @@ export class Game {
         void bot;
       }
     });
+
+    // --- deployables ---
+    // A rocket landing in the base wrecks the sentry it lands on, so turrets
+    // are something to defend rather than something to hide behind.
+    for (const wrecked of this.deployables.damageInRadius(x, y, z, r, def.playerDamage * damageMultiplier)) {
+      this.spawnBlockDebris(wrecked.vx, wrecked.vy, wrecked.vz, COL_STEEL, 18);
+      this.audio.play('blockbreak', this.distanceToPlayer(wrecked.x, wrecked.vy, wrecked.z));
+      this.hud.log('A deployable was destroyed', 'bad');
+    }
+
+    // --- the field and the market ---
+    // A blast does not distinguish, and neither the people in the paddy nor
+    // the ones in the street have anything to get behind. Everything within
+    // earshot runs, whether it was touched or not, which is most of what an
+    // explosion does to a village.
+    let civilianDead = 0;
+    const dmg = def.playerDamage * damageMultiplier;
+    const caught = [
+      ...(this.farmers?.blast(x, y, z, r, dmg) ?? []),
+      ...(this.townsfolk?.blast(x, y, z, r, dmg) ?? []),
+    ];
+    for (const person of caught) {
+      this.blood.pool(
+        person.x, person.y + 0.2, person.z,
+        1.2 * person.scale + Math.random() * 0.4, CORPSE_LIFE + 14,
+      );
+      this.audio.play(
+        'death-cry', this.distanceToPlayer(person.x, person.y, person.z),
+        { rate: person.scale < 0.7 ? 1.5 : 1.05 },
+      );
+      civilianDead++;
+    }
+    // A shell into the field is the same crime several times over, and it is
+    // counted that way — one of these does more to the valley than a run of
+    // rifle rounds ever could.
+    if (civilianDead > 0 && !hostile) {
+      let crossed = -1;
+      for (let i = 0; i < civilianDead; i++) {
+        crossed = Math.max(crossed, this.aggression.civilianKilled());
+      }
+      this.hud.log(
+        `${civilianDead} civilian${civilianDead === 1 ? '' : 's'} killed`
+        + `  (${this.aggression.civiliansKilled})`,
+        'bad',
+      );
+      this.onRageCrossed(crossed);
+      this.hunterTimer = Math.min(this.hunterTimer, 8);
+    }
 
     // --- player ---
     const pdx = this.player.position.x - x;
@@ -1606,6 +2221,59 @@ export class Game {
   }
 
   /**
+   * Takes a voxel out whole, for the shaft a tunnel rat cuts to come up
+   * through.
+   *
+   * Deliberately not routed through the breach path: breaching is a fight with
+   * a wall and takes as long as the wall's hit points say it takes, and an
+   * ambush that has to wait on a hit point bar is not an ambush. The block goes,
+   * the earth flies, and the man is out of the ground a second later.
+   */
+  private botDig(bot: Bot, x: number, y: number, z: number): void {
+    const color = this.world.get(x, y, z);
+    if (color === AIR) return;
+    // Big enough to take anything diggable in one, which is what makes it read
+    // as a shaft opening rather than a wall being worn down. Material the world
+    // calls indestructible still refuses it, and the AI checked for that before
+    // choosing the column.
+    this.damageBlock(x, y, z, 100000, true);
+    this.spawnBlockDebris(x, y, z, color, 5);
+    void bot;
+  }
+
+  /**
+   * Earth turning over where something is moving underneath it.
+   *
+   * This is the only warning a tunnel rat gives, so it is drawn on the surface
+   * above the man rather than on the man: a line of spoil crossing the paddy
+   * toward the wire, with nothing visible making it.
+   */
+  private spawnSpoil(bot: Bot, x: number, y: number, z: number, strength: number): void {
+    if (this.distanceToPlayer(x, y, z) > 70) return;
+
+    const color = this.world.get(Math.floor(x), Math.floor(y) - 1, Math.floor(z));
+    const r = color === AIR ? 0.42 : palette[color * 3] / 255;
+    const g = color === AIR ? 0.34 : palette[color * 3 + 1] / 255;
+    const b = color === AIR ? 0.24 : palette[color * 3 + 2] / 255;
+
+    const n = strength > 0.6 ? 7 : 2;
+    for (let i = 0; i < n; i++) {
+      this.particles.spawn(
+        x + (Math.random() - 0.5) * 0.9, y, z + (Math.random() - 0.5) * 0.9,
+        (Math.random() - 0.5) * 3.5,
+        1.6 + Math.random() * 4.5 * strength,
+        (Math.random() - 0.5) * 3.5,
+        r, g, b, 1,
+        2.2 + Math.random() * 2.5, 0.35 + Math.random() * 0.5 * strength,
+        22, 0.7, true,
+      );
+    }
+    if (strength >= 0.8 && bot.submerged > 0.72) {
+      this.audio.play('dig', this.distanceToPlayer(x, y, z));
+    }
+  }
+
+  /**
    * Places one block of an enemy blueprint. Refusing a placement (rather than
    * skipping the whole structure) lets the bot carry on with the rest of the
    * site, so a ramp built around an awkward rock still gets finished.
@@ -1682,7 +2350,7 @@ export class Game {
   private damagePlayer(amount: number, fromX: number, fromZ: number): void {
     if (!this.player.alive || this.player.invulnerable > 0) return;
     const died = this.player.damage(amount);
-    this.hud.flashDamage();
+    this.hud.flashDamage(amount / this.player.maxHp);
     this.audio.play('hurt');
 
     // Direction indicator relative to where the player is looking.
@@ -1692,22 +2360,21 @@ export class Game {
     if (died) this.onPlayerDeath();
   }
 
+  /**
+   * Going down is not a life spent -- there is no life counter. You lose the
+   * ground you were holding and the walk back, and the wave keeps coming; the
+   * run itself only ends when the Core falls.
+   */
   private onPlayerDeath(): void {
-    this.loadout.tickets--;
     this.audio.play('death');
-    if (this.loadout.tickets < 0) {
-      this.endRun('You were overrun.');
-      return;
-    }
     this.hud.showAnnounce('YOU DIED', 'bad');
-    this.hud.log(`Respawning… ${this.loadout.tickets} lives left`, 'bad');
+    this.hud.log('Regrouping at the base…', 'bad');
     this.respawnTimer = 5;
   }
 
   private doRespawn(): void {
     const s = this.layout.playerSpawn;
     this.player.respawn(s.x, s.y + 1, s.z);
-    this.player.maxHp = this.player.maxHp;
     this.hud.log('Respawned at the base', 'good');
   }
 
@@ -1718,11 +2385,11 @@ export class Game {
 
   private endRun(reason: string): void {
     this.radio.pause();
+    this.villageMusic.stop();
     // The bed keeps running under the game-over screen. Cutting it makes the
     // silence land as a bug rather than as a beat; the next start() is a no-op.
 
     this.waves.gameOver();
-    this.classMenu.close();
     this.input.exitLock();
     this.hud.log(reason, 'bad');
     this.onGameOver?.({
@@ -1742,9 +2409,22 @@ export class Game {
   private onPhaseChange(phase: Phase, wave: number): void {
     switch (phase) {
       case Phase.Prep:
-        this.hud.log('PREP PHASE — repair, build and shop', 'good');
+        this.hud.log('The line has gone quiet — repair, build and shop', 'good');
         this.player.heal(this.player.maxHp);
         this.loadout.refillAllAmmo();
+        // The village comes back out: whoever ran for the trees is back at
+        // work or back on the street, and the dead are not. The field being
+        // worked and the market being open again is the clock on the whole
+        // run — and the reason it is worth counting what you did to them last
+        // time, because they come back and you can do it again.
+        this.farmers?.respawn();
+        this.townsfolk?.respawn();
+        // And the jungle refills. Camps you cleared during the raid are
+        // manned again by the time the next one comes, which is what keeps a
+        // trip to the merchants a decision rather than a formality -- but they
+        // stay cleared for the whole of a raid, so clearing one buys something
+        // real.
+        this.manOutposts();
         break;
       case Phase.Combat:
         this.audio.play('wave');
@@ -1761,7 +2441,11 @@ export class Game {
 
   private onWaveCleared(wave: number): void {
     let bonus = POINTS.waveClear * wave;
-    this.hud.showAnnounce(`WAVE ${wave} CLEARED`, 'good');
+    // Not "cleared" any more — nothing is cleared. The raid has spent itself
+    // and whatever is still walking around out there is still walking around.
+    const left = this.bots.livingCount;
+    this.hud.showAnnounce('ATTACK BROKEN', 'good');
+    if (left > 0) this.hud.log(`${left} still in the valley`, 'warn');
 
     if (!this.waves.baseDamagedThisWave) {
       bonus += POINTS.noBaseDamageBonus;
@@ -1770,12 +2454,6 @@ export class Game {
     if (!this.waves.repairedThisWave) {
       bonus += POINTS.noRepairBonus;
       this.hud.log(`No repairs needed  +${POINTS.noRepairBonus}`, 'good');
-    }
-
-    // Clearing a wave with lives to spare gives one back, capped at 3.
-    if (this.loadout.tickets < 3) {
-      this.loadout.tickets++;
-      this.hud.log('Respawn ticket recovered', 'good');
     }
 
     this.economy.award(bonus);
@@ -1787,9 +2465,19 @@ export class Game {
   // Merchants
   // -------------------------------------------------------------------------
   private isInTown(): boolean {
-    const dx = this.player.position.x - this.layout.townCenter.x;
-    const dz = this.player.position.z - this.layout.townCenter.z;
-    return Math.hypot(dx, dz) < 20;
+    return this.distanceOutsideTown() === 0;
+  }
+
+  /**
+   * How far outside the village the player is, in blocks, and zero anywhere on
+   * it. Measured against the shelf the village stands on rather than a circle
+   * around the middle of it: the huts at the ends of the street are as much
+   * the village as the market square is.
+   */
+  private distanceOutsideTown(): number {
+    const dx = Math.abs(this.player.position.x - this.layout.townCenter.x) - TOWN_HALF_X;
+    const dz = Math.abs(this.player.position.z - this.layout.townCenter.z) - TOWN_HALF_Z;
+    return Math.max(0, dx, dz);
   }
 
   /**
@@ -1841,6 +2529,10 @@ export class Game {
       if (d < best) { best = d; this.nearMerchant = m; }
     }
 
+    this.nearCrate = this.player.alive
+      ? this.deployables.crateNear(this.player.position.x, this.player.position.y, this.player.position.z)
+      : null;
+
     if (this.shop.open) { this.hud.setPrompt(''); return; }
 
     // Aiming at a button beats standing near a merchant: you had to point at it.
@@ -1853,6 +2545,13 @@ export class Game {
       return;
     }
 
+    if (this.nearCrate) {
+      this.hud.setPrompt(
+        `<kbd>E</kbd> Ammo Crate — ${this.nearCrate.charges} resuppl${this.nearCrate.charges === 1 ? 'y' : 'ies'} left`,
+      );
+      return;
+    }
+
     if (this.nearMerchant) {
       if (this.waves.phase === Phase.Combat) {
         this.hud.setPrompt(`${this.nearMerchant.name} — closed during combat`);
@@ -1862,8 +2561,12 @@ export class Game {
       return;
     }
 
-    if (this.waves.phase === Phase.Prep) {
-      this.hud.setPrompt('<kbd>E</kbd> ready up to start the wave early');
+    if (this.loadout.slot === Slot.Build && this.loadout.totalDeployables > 0) {
+      const def = DEPLOYABLES[this.loadout.deploySelected];
+      this.hud.setPrompt(
+        `<kbd>LMB</kbd> place ${def.name} · <kbd>Q</kbd>/<kbd>E</kbd> rotate · hold <kbd>5</kbd> to pick`
+        + ` — ${this.loadout.deployStock(def.id)} left`,
+      );
       return;
     }
 
@@ -1890,6 +2593,10 @@ export class Game {
 
     if (this.aimedButton >= 0) { this.pressRadio(this.aimedButton); return; }
 
+    // Crates come before merchants: the whole point of one is that it works
+    // where and when a merchant does not.
+    if (this.nearCrate) { this.useAmmoCrate(this.nearCrate); return; }
+
     if (this.nearMerchant) {
       if (this.waves.phase === Phase.Combat) {
         this.audio.play('deny');
@@ -1902,15 +2609,9 @@ export class Game {
       return;
     }
 
-    const prep = this.net
-      ? this.net.readWaveState().phase === Phase.Prep
-      : this.waves.phase === Phase.Prep;
-    if (prep) {
-      // Any player can start the wave early; it's a co-op game.
-      if (this.net) this.net.sendReady();
-      else this.waves.readyUp();
-      this.hud.log('Ready — wave starting', 'warn');
-    }
+    // Nothing else E does. There is no readying up: the valley picks its own
+    // moment, and E is for the people and the boxes that are standing in front
+    // of you.
   }
 
   /** Works one of the two buttons on the front of the boombox. */
@@ -1929,6 +2630,185 @@ export class Game {
     this.hud.log(playing ? `Radio — ${this.radio.track.title}` : 'Radio off', 'info');
   }
 
+  // -------------------------------------------------------------------------
+  // Deployables
+  // -------------------------------------------------------------------------
+  /**
+   * Where the thing in the deploy slot would land, or null if nowhere.
+   *
+   * Placement works off the block the player is looking at, exactly like the
+   * block tool: the deployable stands in the air voxel against the face that
+   * was hit, and the footprint check makes sure it has ground under all of it.
+   */
+  private aimDeploySpot(): { vx: number; vy: number; vz: number; alongX: boolean; yaw: number } | null {
+    this.player.getEye(tmpEye);
+    this.player.getLookDirection(tmpDir);
+    const hit = raycastVoxels(
+      this.world, tmpEye.x, tmpEye.y, tmpEye.z, tmpDir.x, tmpDir.y, tmpDir.z, DEPLOY_REACH,
+    );
+    if (!hit.hit) return null;
+
+    // Snap to the quarter turn you're facing, then add whatever Q and E have
+    // nudged it by. A barricade goes *across* your facing, so it's a wall
+    // between you and what you're looking at rather than a line pointing at it.
+    const facing = Math.round(Math.atan2(tmpDir.x, tmpDir.z) / HALF_TURN);
+    const turns = (facing + this.loadout.deployRotation + 8) % 4;
+    return {
+      vx: hit.px, vy: hit.py, vz: hit.pz,
+      alongX: turns % 2 === 0,
+      yaw: turns * HALF_TURN,
+    };
+  }
+
+  /** Redraws the ghost showing where the next deployable would stand. */
+  private updateDeployGhost(): void {
+    if (this.loadout.slot !== Slot.Build || !this.player.alive || this.shop.open) {
+      this.deployables.hideGhost();
+      return;
+    }
+    const id = this.loadout.deploySelected;
+    const def = DEPLOYABLES[id];
+    const spot = this.aimDeploySpot();
+    if (!spot) { this.deployables.hideGhost(); return; }
+
+    const ok = this.loadout.deployStock(id) > 0
+      && !this.deployables.atCapacity(id)
+      && this.deployables.fits(def, spot.vx, spot.vy, spot.vz, spot.alongX)
+      && this.deployFootprintClearOfPlayer(def, spot.vx, spot.vy, spot.vz, spot.alongX);
+    this.deployables.showGhost(def, spot.vx, spot.vy, spot.vz, spot.alongX, ok);
+  }
+
+  /** Nothing may be dropped on the player's own head. */
+  private deployFootprintClearOfPlayer(
+    def: DeployDef, vx: number, vy: number, vz: number, alongX: boolean,
+  ): boolean {
+    const half = (def.width - 1) / 2;
+    for (let i = -half; i <= half; i++) {
+      const cx = vx + (alongX ? i : 0);
+      const cz = vz + (alongX ? 0 : i);
+      for (let h = 0; h < def.height; h++) {
+        if (!occupies(def, i + half, h)) continue;
+        if (!this.canPlaceAt(cx, vy + h, cz)) return false;
+      }
+    }
+    return true;
+  }
+
+  private placeDeployable(): void {
+    const id = this.loadout.deploySelected;
+    const def = DEPLOYABLES[id];
+
+    if (this.loadout.deployStock(id) <= 0) {
+      this.audio.play('deny');
+      this.hud.setPrompt(`No ${def.name.toLowerCase()}s — buy them from the Defense Merchant`);
+      return;
+    }
+    if (this.deployables.atCapacity(id)) {
+      this.audio.play('deny');
+      this.hud.log(`${def.name} limit reached (${def.maxPlaced} out)`, 'warn');
+      return;
+    }
+
+    const spot = this.aimDeploySpot();
+    if (!spot
+      || !this.deployables.fits(def, spot.vx, spot.vy, spot.vz, spot.alongX)
+      || !this.deployFootprintClearOfPlayer(def, spot.vx, spot.vy, spot.vz, spot.alongX)) {
+      this.audio.play('deny');
+      this.hud.setPrompt('No room for that here — needs flat ground and clearance');
+      return;
+    }
+
+    if (def.pattern) this.stampBarricade(def, spot.vx, spot.vy, spot.vz, spot.alongX);
+    else if (id === DeployId.Turret) this.deployables.addTurret(spot.vx, spot.vy, spot.vz, spot.yaw);
+    else this.deployables.addCrate(spot.vx, spot.vy, spot.vz, spot.yaw);
+
+    this.loadout.consumeDeployable(id);
+    this.loadout.blockTool.cooldown = this.loadout.blockTool.def.delay;
+    this.audio.play('place');
+    this.hud.log(`${def.name} deployed`, 'good');
+
+    // Running out of the kind you had selected switches you to something you
+    // still have, rather than leaving you clicking on an empty slot.
+    if (this.loadout.deployStock(id) === 0 && this.loadout.totalDeployables > 0) {
+      this.loadout.cycleDeployable(1);
+    }
+  }
+
+  /**
+   * Writes a barricade into the voxel world as sandbags.
+   *
+   * It is deliberately real terrain rather than a prop: it collides, it takes
+   * fire, bots path around it and tear at it, and the block tool patches it
+   * back up. Reinforced HP with a sandbag colour.
+   */
+  private stampBarricade(def: DeployDef, vx: number, vy: number, vz: number, alongX: boolean): void {
+    const half = (def.width - 1) / 2;
+    for (let i = -half; i <= half; i++) {
+      const x = vx + (alongX ? i : 0);
+      const z = vz + (alongX ? 0 : i);
+      for (let h = 0; h < def.height; h++) {
+        if (!occupies(def, i + half, h)) continue;
+        const y = vy + h;
+        if (this.world.get(x, y, z) !== AIR) continue;
+        this.world.set(x, y, z, COL_SANDBAG, Mat.Reinforced);
+        this.net?.sendVoxel({ op: 0, x, y, z, color: COL_SANDBAG, mat: Mat.Reinforced });
+        this.stats.blocksPlaced++;
+      }
+    }
+  }
+
+  /**
+   * One round out of a turret.
+   *
+   * Deliberately not routed through `applyBotDamage`: that plays the player's
+   * own hit confirmation, and a sentry chattering away across the base would
+   * fill the mix with hitmarker ticks that weren't the player's doing. A
+   * turret kill still pays, at half rate — it's the turret's work, not yours.
+   */
+  private turretFire(turret: Turret, target: Bot, muzzle: THREE.Vector3): void {
+    const tx = target.position.x;
+    const ty = target.position.y + target.poseHeight * 0.55;
+    const tz = target.position.z;
+
+    this.tracers.spawn(muzzle.x, muzzle.y, muzzle.z, tx, ty, tz, 0.85, 1, 0.7);
+    this.particles.spawn(
+      muzzle.x, muzzle.y, muzzle.z, 0, 1.2, 0,
+      0.08, 1, 0.85, 0.45, 0.9, 0.35, 22, 0.6,
+    );
+    this.audio.play('smg', this.distanceToPlayer(muzzle.x, muzzle.y, muzzle.z));
+
+    const dx = tx - muzzle.x;
+    const dz = tz - muzzle.z;
+    const len = Math.max(0.001, Math.hypot(dx, dz));
+    const killed = this.bots.damage(target, TURRET.damage, {
+      x: tx, y: ty, z: tz, dirX: dx / len, dirZ: dz / len, force: 1,
+    });
+    this.blood.spatter(tx, ty, tz, killed ? 3 : 1, killed ? 1.2 : 0.8);
+
+    this.economy.award(Math.round(POINTS.hit * 0.5));
+    if (killed) {
+      this.economy.award(Math.round(target.def.points * 0.5));
+      this.stats.kills++;
+    }
+    if (turret.dry) this.hud.log('Sentry out of ammo — buy a Turret Drum', 'warn');
+  }
+
+  /** Takes a resupply out of the crate the player is standing at. */
+  private useAmmoCrate(crate: AmmoCrate): void {
+    if (!crate.take()) {
+      this.audio.play('deny');
+      return;
+    }
+    this.loadout.addAmmoFraction(CRATE_FRACTION);
+    this.deployables.refillTurrets();
+    this.audio.play('reload');
+    this.hud.log(
+      crate.empty ? 'Resupplied — crate empty' : `Resupplied — ${crate.charges} left in the crate`,
+      'good',
+    );
+    if (crate.empty) this.deployables.remove(crate);
+  }
+
   private buy(item: ShopItem): boolean {
     if (!this.economy.canAfford(item)) {
       this.audio.play('deny');
@@ -1937,9 +2817,33 @@ export class Game {
     if (!this.economy.buy(item)) return false;
 
     switch (item.effect) {
-      case ItemEffect.RefillAmmo:
+      case ItemEffect.RefillAmmo: {
         this.loadout.refillAllAmmo();
+        const reloaded = this.deployables.refillTurrets();
+        if (reloaded > 0) this.hud.log(`${reloaded} sentr${reloaded === 1 ? 'y' : 'ies'} reloaded`, 'good');
         break;
+      }
+      case ItemEffect.AmmoBox:
+        this.loadout.refillAllAmmo();
+        this.loadout.addAmmoFraction(0.5);
+        break;
+      case ItemEffect.Bandolier:
+        this.loadout.applyBandolier();
+        break;
+      case ItemEffect.GiveDeployable:
+        if (item.deployable !== undefined) {
+          this.loadout.addDeployable(item.deployable, item.amount ?? 1);
+          this.loadout.deploySelected = item.deployable;
+        }
+        break;
+      case ItemEffect.TurretAmmo: {
+        const n = this.deployables.refillTurrets();
+        this.hud.log(
+          n > 0 ? `${n} sentr${n === 1 ? 'y' : 'ies'} reloaded` : 'No sentries out to reload',
+          n > 0 ? 'good' : 'warn',
+        );
+        break;
+      }
       case ItemEffect.GiveGrenades:
         this.loadout.grenades.stock = Math.min(
           this.loadout.grenades.def.maxStock,
@@ -1955,12 +2859,11 @@ export class Game {
       case ItemEffect.RepairAll:
         this.repairAll();
         break;
-      case ItemEffect.MaxHealth:
+      case ItemEffect.Toughness:
+        // A bigger pool is more hits before you go down, not a bigger number:
+        // nothing anywhere shows it, you just last longer in the open.
         this.player.maxHp += item.amount ?? 25;
         this.player.heal(item.amount ?? 25);
-        break;
-      case ItemEffect.ExtraLife:
-        this.loadout.tickets += item.amount ?? 1;
         break;
       case ItemEffect.FastReload:
         this.loadout.fastReload = true;
@@ -2048,7 +2951,7 @@ export class Game {
 
   private updateHud(dt: number): void {
     this.hud.update(dt);
-    this.hud.updateVitals(this.player.hp, this.player.maxHp, Math.max(0, this.loadout.tickets));
+    this.hud.setVitals(this.player.hurt, this.player.recovering);
     this.hud.updatePoints(this.economy.points);
     this.hud.updateLoadout(this.loadout);
     this.hud.updateCompass(this.player.yaw);
@@ -2059,42 +2962,6 @@ export class Game {
       ? w.currentSpread(moving, this.player.airborne, this.viewModel.adsAmount > 0.5)
       : 0;
     this.hud.updateCrosshair(spread * 900);
-
-    // In multiplayer the wave clock is the server's, not ours.
-    if (this.net) {
-      const s = this.net.readWaveState();
-      const label = s.runOver ? 'RUN OVER'
-        : s.phase === Phase.Prep ? 'PREP PHASE'
-        : s.phase === Phase.Combat ? 'IN COMBAT' : 'CLEARED';
-      const value = `WAVE ${s.phase === Phase.Prep ? s.wave + 1 : s.wave}`;
-      const sub = s.phase === Phase.Prep
-        ? `<span id="prep-timer">${Math.max(0, Math.ceil(s.prepTimer))}s</span> — build, repair, shop`
-        : s.phase === Phase.Combat ? `${s.remaining} enemies left`
-        : s.runOver ? '' : 'Regrouping…';
-      this.hud.updateWave(label, value, sub, s.runOver ? -1 : s.progress);
-      return;
-    }
-
-    switch (this.waves.phase) {
-      case Phase.Prep: {
-        const t = Math.max(0, Math.ceil(this.waves.prepTimer));
-        this.hud.updateWave(
-          'PREP PHASE',
-          `WAVE ${this.waves.wave + 1}`,
-          `<span id="prep-timer">${t}s</span> — build, repair, shop`,
-        );
-        break;
-      }
-      case Phase.Combat:
-        this.hud.updateWave('IN COMBAT', `WAVE ${this.waves.wave}`, `${this.waves.remaining} enemies left`);
-        break;
-      case Phase.Cleared:
-        this.hud.updateWave('CLEARED', `WAVE ${this.waves.wave}`, 'Regrouping…');
-        break;
-      case Phase.GameOver:
-        this.hud.updateWave('RUN OVER', `WAVE ${this.waves.wave}`, '');
-        break;
-    }
   }
 
   private updatePerf(): void {
@@ -2211,11 +3078,21 @@ export class Game {
   get hudRef(): HUD { return this.hud; }
   get inputRef(): Input { return this.input; }
   get shopOpen(): boolean { return this.shop.open; }
-  /** Any full-screen UI that has taken the pointer; suppresses the auto-pause. */
-  get menuOpen(): boolean { return this.shop.open || this.classMenu.open; }
+  /** UI that has taken the pointer on purpose; suppresses the auto-pause. */
+  get menuOpen(): boolean { return this.shop.open; }
 }
 
-/** Cone-scatter a normalised direction in place. */
+/**
+ * Cone-scatter a normalised direction in place.
+ *
+ * The basis vectors are scratch of their own rather than the shared tmpVec
+ * pair: callers pass those in as `dir`, and building the basis on top of the
+ * vector being scattered collapses it to zero — which is a shot that travels
+ * nowhere and hits nothing.
+ */
+const spreadU = new THREE.Vector3();
+const spreadV = new THREE.Vector3();
+
 function applySpread(dir: THREE.Vector3, spread: number): void {
   if (spread <= 0) return;
   // Uniform-ish disc scatter around the aim axis.
@@ -2223,10 +3100,10 @@ function applySpread(dir: THREE.Vector3, spread: number): void {
   const r = Math.sqrt(Math.random()) * spread;
   // Build a basis perpendicular to dir.
   const ax = Math.abs(dir.y) < 0.99 ? 0 : 1;
-  tmpVec.set(ax, ax === 0 ? 1 : 0, 0).cross(dir).normalize();
-  tmpVec2.copy(dir).cross(tmpVec).normalize();
-  dir.addScaledVector(tmpVec, Math.cos(a) * r);
-  dir.addScaledVector(tmpVec2, Math.sin(a) * r);
+  spreadU.set(ax, ax === 0 ? 1 : 0, 0).cross(dir).normalize();
+  spreadV.copy(dir).cross(spreadU).normalize();
+  dir.addScaledVector(spreadU, Math.cos(a) * r);
+  dir.addScaledVector(spreadV, Math.sin(a) * r);
   dir.normalize();
 }
 

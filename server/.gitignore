@@ -5,3 +5,6 @@ build
 # Contains the Colyseus Cloud deploy token. Never commit this.
 .colyseus-cloud.json
 .env
+
+# Throwaway experiments, not part of the build.
+.scratch/

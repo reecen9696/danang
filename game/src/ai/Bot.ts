@@ -21,6 +21,18 @@ export const enum BotState {
   /** Badly hurt — break contact, get behind something, come back. */
   Regroup = 6,
   Dying = 7,
+  /** Under the ground, moving through it toward a mouth to come up out of. */
+  Burrow = 8,
+  /** Coming up out of a mouth. Vulnerable, and loud. */
+  Emerge = 9,
+  /** Dropping back down out of the fight. */
+  Submerge = 10,
+  /**
+   * Manning an outpost: hold this ground, watch the trees, and do not walk to
+   * the objective. What a garrison does until somebody gives it a reason to
+   * stop doing it.
+   */
+  Guard = 11,
 }
 
 /** Longest tunnel a bot will commit to, in voxels. */
@@ -29,6 +41,11 @@ export const MAX_TUNNEL = 28;
 /**
  * Upper bound on the boxes drawn per bot, which is what the instanced mesh is
  * sized from. The render loop in BotManager must stay under it.
+ *
+ * The worst case is 23: eleven for the body, seven for the hat, and five for a
+ * man who rolled every optional garment at once -- rolled sleeves, cut-off
+ * trousers and a scarf. Anything new that a bot can wear has to fit in what is
+ * left, or this and the mesh grow together.
  */
 export const BOT_PARTS = 24;
 
@@ -99,6 +116,39 @@ export class Bot {
   aimSpread = 0.1;
   /** Firing at a last known position rather than a visible target. */
   suppressing = false;
+  /**
+   * How much of the player this bot has put together, 0..1.
+   *
+   * Contact is not a boolean and it is not instant: a man catches movement,
+   * turns his head, works out what he is looking at, and *then* shouts.
+   * `seesTarget` only goes true when this reaches 1, so everything the player
+   * does about being seen -- crouching, sneaking, standing still, staying out
+   * of the arc a sentry is actually covering -- buys time here. See ai/stealth.
+   */
+  awareness = 0;
+  /**
+   * Set the first time awareness fills. An alerted man does not un-alert: he
+   * keeps hunting long after he has lost sight of you, which is what stops
+   * breaking line of sight for a second being a reset button on a firefight.
+   */
+  alerted = false;
+  /** Last frame's line of sight, so the strided check can drive every frame. */
+  hasLos = false;
+  /**
+   * Drawn on the minimap. Garrisons stay off it until they give themselves
+   * away -- an ambush you can read off the radar is not an ambush.
+   */
+  revealed = false;
+
+  // --- garrison ------------------------------------------------------------
+  /** Mans a jungle outpost instead of walking in with a wave. */
+  garrison = false;
+  /** The post this bot holds, and how far it may stray from it. */
+  postX = 0;
+  postZ = 0;
+  postRadius = 0;
+  /** Seconds until an idle sentry looks somewhere else, or shifts his feet. */
+  scanTimer = 0;
 
   // --- combat --------------------------------------------------------------
   fireTimer = 0;
@@ -158,6 +208,49 @@ export class Bot {
   crouch = 0;
   /** What `crouch` is easing toward; peeking flips this between bursts. */
   crouchTarget = 0;
+  /**
+   * Up out of cover to shoot. A bot behind a parapet spends most of its time
+   * ducked and only comes up in short, deliberate windows — so the crouch is a
+   * cycle it runs on rather than something derived from the fire timer, and
+   * the window it's up for is the window you get to hit it in.
+   */
+  peeking = false;
+  /** Seconds left in the current half of that cycle. */
+  peekTimer = 0;
+
+  // --- burrowing -----------------------------------------------------------
+  /**
+   * Where this bot intends to come up. Set while burrowing; `hasExit` gates it
+   * the same way `hasMoveTarget` gates the surface one.
+   */
+  exitX = 0;
+  exitZ = 0;
+  hasExit = false;
+  /**
+   * Index into TunnelNetwork.holes of the mouth being used, or -1 for a shaft
+   * this bot is about to cut itself.
+   */
+  exitHole = -1;
+  /**
+   * 0 = fully surfaced, 1 = fully under. Drives the vertical slide through
+   * emerging and submerging, and — because it is subtracted from the drawn and
+   * simulated position — a bot halfway out of a hole really is only halfway
+   * out: half a body to see, half a body to hit.
+   */
+  submerged = 0;
+  /** Seconds the bot has been below ground on this trip. */
+  burrowTime = 0;
+  /**
+   * Squad-synchronised hold: a rat that arrives under its mouth early waits
+   * here rather than coming up alone. Zero means go.
+   */
+  ambushHold = 0;
+  /** Bursts fired since surfacing. Past the archetype's appetite, it drops. */
+  shotsUp = 0;
+  /** Seconds above ground on this trip, so nobody overstays a welcome. */
+  surfaceTime = 0;
+  /** Throttles the spray of earth the burrow trail leaves on the surface. */
+  trailTimer = 0;
 
   // --- presentation --------------------------------------------------------
   /** Seconds the body has left before it's cleaned up. */
@@ -202,6 +295,28 @@ export class Bot {
   /** How wide the arms and legs finish up splayed, 0..1 each. */
   sprawlArm = 0;
   sprawlLeg = 0;
+
+  // --- what he is wearing ---------------------------------------------------
+  // Rolled once when he spawns and held for his life. These are numbers rather
+  // than colours on purpose: which bolt of cloth or which skin a roll lands on
+  // is a question for the thing that draws him, and BotManager answers it.
+
+  /** Multiplier on the kind's uniform colour: a different bolt, a different sun. */
+  clothTone = 1;
+  /** Trousers relative to the shirt. Not everyone's are the same cut of cloth. */
+  legTone = 0.72;
+  /** How old this man's hat is. Straw bleaches. */
+  hatTone = 1;
+  /** The webbing, which is the one piece of kit that was issued to him. */
+  rigTone = 1;
+  /** Which skin his hands and shins are, 0..1 into the palette. */
+  skinRoll = 0;
+  /** Which scarf, 0..1 into the palette, or negative for a bare neck. */
+  scarfRoll = -1;
+  /** Sleeves pushed up past the elbow. */
+  sleevesUp = false;
+  /** Trousers cut off at the knee. */
+  shorts = false;
   /** How far the hat has come off, 0..1. It's knocked clear by the hit. */
   hatFall = 0;
   /** Extra spin on the hat as it tumbles, so it doesn't land square. */
@@ -266,6 +381,25 @@ export class Bot {
     this.aimValid = false;
     this.aimPoint.set(x, y, z);
 
+    // Every man in a squad is issued the same uniform and no two of them look
+    // the same in it: different bolts of cloth, different amounts of sun and
+    // mud on them, a hat older or newer than the next man's. The kind's own
+    // colours stay the anchor -- a Raider still reads as a Raider at a hundred
+    // blocks -- and all of this moves around them rather than over them.
+    this.clothTone = 0.84 + rand() * 0.30;
+    this.legTone = 0.60 + rand() * 0.26;
+    this.hatTone = 0.82 + rand() * 0.34;
+    this.rigTone = 0.86 + rand() * 0.26;
+    this.skinRoll = rand();
+    // A third have the sleeves shoved up and a quarter are in cut-off
+    // trousers. This is a column that has been walking for days through a
+    // valley in the heat, not a parade.
+    this.sleevesUp = rand() < 0.34;
+    this.shorts = rand() < 0.24;
+    // Half wear the khăn rằn, and on a man dressed in dark green it is the
+    // loudest thing about him.
+    this.scarfRoll = rand() < 0.5 ? rand() : -1;
+
     this.fireTimer = rand() * this.def.fireInterval;
     this.burstLeft = 0;
     this.burstTimer = 0;
@@ -286,6 +420,15 @@ export class Bot {
     this.buildActive = false;
     this.aimSpread = 0.1;
     this.suppressing = false;
+    this.awareness = 0;
+    this.alerted = false;
+    this.hasLos = false;
+    this.revealed = false;
+    this.garrison = false;
+    this.postX = x;
+    this.postZ = z;
+    this.postRadius = 0;
+    this.scanTimer = rand() * 3;
     this.buildCooldown = rand() * 2;
     this.tunnelLen = 0;
     this.tunnelCursor = 0;
@@ -295,6 +438,17 @@ export class Bot {
     this.coverQuality = 0;
     this.crouch = 0;
     this.crouchTarget = 0;
+    this.peeking = false;
+    this.peekTimer = 0;
+
+    this.hasExit = false;
+    this.exitHole = -1;
+    this.submerged = 0;
+    this.burrowTime = 0;
+    this.ambushHold = 0;
+    this.shotsUp = 0;
+    this.surfaceTime = 0;
+    this.trailTimer = 0;
 
     this.deathTimer = 0;
     this.hitFlash = 0;
@@ -358,6 +512,26 @@ export class Bot {
 
   get alive(): boolean {
     return this.active && this.state !== BotState.Dying;
+  }
+
+  /**
+   * Below the surface far enough not to be part of the fight.
+   *
+   * Nothing about hit detection consults this — a burrower's position really is
+   * underground, so the terrain occludes it and the ordinary voxel raycast
+   * stops at the roof of its tunnel. What it gates is intent: a man with his
+   * head still in the dirt doesn't shoot, isn't shot at by the squad's
+   * bookkeeping, and doesn't count as being in the open.
+   */
+  get underground(): boolean {
+    return this.submerged > 0.35;
+  }
+
+  /** In the ground, or on the way in or out of it. */
+  get burrowing(): boolean {
+    return this.state === BotState.Burrow
+      || this.state === BotState.Emerge
+      || this.state === BotState.Submerge;
   }
 
   get hurt(): boolean {

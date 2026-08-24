@@ -9,6 +9,11 @@ export const enum ProjectileKind {
   Grenade = 0,
   Rocket = 1,
   TankShell = 2,
+  /**
+   * A 40mm out of the Thumper: falls on the same arc a grenade does, but goes
+   * off the moment it touches something instead of lying there on a fuse.
+   */
+  Shell = 3,
 }
 
 export interface Projectile {
@@ -19,6 +24,12 @@ export interface Projectile {
   vx: number; vy: number; vz: number;
   /** Seconds until it detonates on its own (grenade fuse). */
   fuse: number;
+  /**
+   * Seconds before a contact fuse will set it off. A shell fired into a wall
+   * an arm's length away skips off it rather than killing whoever fired it,
+   * which is exactly what a real arming distance is for.
+   */
+  arm: number;
   /** True when the owner is an enemy. */
   hostile: boolean;
   damageMultiplier: number;
@@ -55,7 +66,7 @@ export class ProjectileSystem {
       this.pool.push({
         active: false, kind: ProjectileKind.Grenade, explosion: 'grenade',
         x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
-        fuse: 0, hostile: false, damageMultiplier: 1, trailTimer: 0,
+        fuse: 0, arm: 0, hostile: false, damageMultiplier: 1, trailTimer: 0,
       });
     }
 
@@ -77,7 +88,7 @@ export class ProjectileSystem {
     kind: ProjectileKind, explosion: ExplosionKind,
     x: number, y: number, z: number,
     vx: number, vy: number, vz: number,
-    fuse: number, hostile: boolean, damageMultiplier = 1,
+    fuse: number, hostile: boolean, damageMultiplier = 1, arm = 0,
   ): Projectile | null {
     for (const p of this.pool) {
       if (p.active) continue;
@@ -87,6 +98,7 @@ export class ProjectileSystem {
       p.x = x; p.y = y; p.z = z;
       p.vx = vx; p.vy = vy; p.vz = vz;
       p.fuse = fuse;
+      p.arm = arm;
       p.hostile = hostile;
       p.damageMultiplier = damageMultiplier;
       p.trailTimer = 0;
@@ -104,7 +116,7 @@ export class ProjectileSystem {
     for (const p of this.pool) {
       if (!p.active) continue;
 
-      if (p.kind === ProjectileKind.Grenade) {
+      if (p.kind === ProjectileKind.Grenade || p.kind === ProjectileKind.Shell) {
         this.stepGrenade(p, dt);
       } else {
         this.stepRocket(p, dt);
@@ -115,6 +127,11 @@ export class ProjectileSystem {
 
   private stepGrenade(p: Projectile, dt: number): void {
     p.fuse -= dt;
+    if (p.arm > 0) p.arm -= dt;
+    // A shell that has travelled far enough to arm goes off on whatever it
+    // touches; a grenade -- and a shell still inside its arming distance --
+    // rides out the bounce below.
+    const contact = p.kind === ProjectileKind.Shell && p.arm <= 0;
 
     p.vy -= 26 * dt;
     // Substep so fast grenades don't tunnel through thin walls.
@@ -128,6 +145,7 @@ export class ProjectileSystem {
       const nz = p.z + p.vz * sdt;
 
       if (this.solid(nx, ny, nz)) {
+        if (contact) { this.detonate(p); return; }
         // Resolve per axis so it bounces off the face it actually struck.
         if (this.solid(nx, p.y, p.z)) { p.vx *= -0.42; }
         else if (this.solid(p.x, ny, p.z)) { p.vy *= -0.38; p.vx *= 0.72; p.vz *= 0.72; }
@@ -199,6 +217,14 @@ export class ProjectileSystem {
         // Flash faster as the fuse runs out.
         const blink = p.fuse < 1 && Math.sin(p.fuse * 40) > 0;
         tmpColor.setHex(blink ? 0xff5533 : 0x39421f);
+      } else if (p.kind === ProjectileKind.Shell) {
+        // Nose-first down the arc. Small and gold: at this size the only thing
+        // that reads at range is where it is going, and the tilt is what says
+        // the round is falling rather than flying.
+        tmpDir.set(p.vx, p.vy, p.vz).normalize();
+        tmpQuat.setFromUnitVectors(UP, tmpDir);
+        tmpScale.set(0.16, 0.34, 0.16);
+        tmpColor.setHex(0xb08a3c);
       } else {
         tmpDir.set(p.vx, p.vy, p.vz).normalize();
         tmpQuat.setFromUnitVectors(UP, tmpDir);

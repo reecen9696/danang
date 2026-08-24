@@ -1,0 +1,13 @@
+{
+  "name": "ace-defense",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Repo-root shim for Colyseus Cloud. The server lives in server/, but it bundles the simulation straight out of game/src, so the deploy root has to be the repo root — not server/.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm --prefix server install --legacy-peer-deps --no-audit --no-fund && npm --prefix server run build",
+    "start": "node server/build/index.js"
+  }
+}

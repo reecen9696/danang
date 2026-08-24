@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PHYS, PLAYER_MAX_HP, WORLD_Y } from '../core/constants';
+import { PHYS, PLAYER_MAX_HP, VITALS, WORLD_Y } from '../core/constants';
 import type { VoxelWorld } from '../voxel/VoxelWorld';
 
 export interface MoveIntent {
@@ -38,9 +38,18 @@ export class Player {
   yaw = 0;
   pitch = 0;
 
+  /**
+   * How much punishment is left before you go down. Never shown as a number:
+   * the HUD reads it as blood closing in from the edges of the screen, and it
+   * refills itself once you have been left alone for VITALS.regenDelay. See
+   * the VITALS comment in constants.ts.
+   */
   hp = PLAYER_MAX_HP;
   maxHp = PLAYER_MAX_HP;
   alive = true;
+
+  /** Seconds since the last hit landed. Gates and ramps the regeneration. */
+  timeSinceDamage = Infinity;
 
   airborne = true;
   wading = false;
@@ -113,6 +122,7 @@ export class Player {
     this.position.set(x, y, z);
     this.velocity.set(0, 0, 0);
     this.hp = this.maxHp;
+    this.timeSinceDamage = Infinity;
     this.alive = true;
     this.invulnerable = 3;
     this.airborne = true;
@@ -121,6 +131,9 @@ export class Player {
 
   damage(amount: number): boolean {
     if (!this.alive || this.invulnerable > 0) return false;
+    // Any hit restarts the clock, so sustained fire never lets you tick back
+    // up mid-firefight -- you have to break contact to recover.
+    this.timeSinceDamage = 0;
     this.hp -= amount;
     if (this.hp <= 0) {
       this.hp = 0;
@@ -134,10 +147,35 @@ export class Player {
     this.hp = Math.min(this.maxHp, this.hp + amount);
   }
 
+  /** True while the pool is actually ticking back up, for the HUD's cue. */
+  get recovering(): boolean {
+    return this.alive && this.hp < this.maxHp && this.timeSinceDamage > VITALS.regenDelay;
+  }
+
+  /** How far down the pool is, 0 (untouched) to 1 (one more burst). */
+  get hurt(): number {
+    return Math.max(0, Math.min(1, 1 - this.hp / this.maxHp));
+  }
+
+  /**
+   * Refill the pool once nothing has touched us for a few seconds, easing in
+   * over `regenRamp` so it starts as a trickle rather than a switch.
+   */
+  private regenerate(dt: number): void {
+    if (this.hp >= this.maxHp) return;
+    const idle = this.timeSinceDamage - VITALS.regenDelay;
+    if (idle <= 0) return;
+    const ramp = Math.min(1, idle / VITALS.regenRamp);
+    this.hp = Math.min(this.maxHp, this.hp + VITALS.regenRate * ramp * dt);
+  }
+
   update(dt: number, intent: MoveIntent): void {
     this.intent = intent;
     if (this.invulnerable > 0) this.invulnerable = Math.max(0, this.invulnerable - dt);
     if (!this.alive) return;
+
+    this.timeSinceDamage += dt;
+    this.regenerate(dt);
 
     // Only allow standing up if there's headroom.
     const wantsCrouch = intent.crouch;

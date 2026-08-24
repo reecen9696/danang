@@ -95,32 +95,39 @@ set(COL_BEDROCK, 34, 34, 38);
 // ---------------------------------------------------------------------------
 // Foliage
 // ---------------------------------------------------------------------------
-export const COL_TRUNK = 19;
+/**
+ * Bark, darkest to palest.
+ *
+ * Six tones rather than three because a trunk is drawn a block at a time and a
+ * single flat colour reads as a painted post. The steps between neighbours are
+ * deliberately small -- the point is a grain that catches the eye at two paces,
+ * not a barber's pole.
+ */
+export const COL_TRUNK_SHADOW = 25;
 export const COL_TRUNK_DARK = 20;
+export const COL_TRUNK_WARM = 26;
+export const COL_TRUNK = 19;
+export const COL_TRUNK_GREY = 27;
 export const COL_TRUNK_PALE = 21;
 
 export const COL_LEAF = 22;
 export const COL_LEAF_DARK = 23;
 export const COL_LEAF_LIGHT = 24;
-export const COL_LEAF_AUTUMN = 25;
-
-export const COL_PINE = 26;
-export const COL_PINE_DARK = 27;
 
 export const COL_PALM = 28;
 export const COL_BUSH = 29;
 
-set(COL_TRUNK, 94, 72, 52);
+set(COL_TRUNK_SHADOW, 56, 42, 32);
 set(COL_TRUNK_DARK, 70, 52, 38);
+set(COL_TRUNK_WARM, 84, 62, 44);
+set(COL_TRUNK, 94, 72, 52);
+// Weathered grey-brown: the lichen and sun-bleach side of a jungle trunk.
+set(COL_TRUNK_GREY, 106, 92, 74);
 set(COL_TRUNK_PALE, 124, 102, 74);
 
 set(COL_LEAF, 66, 98, 54);
 set(COL_LEAF_DARK, 48, 74, 42);
 set(COL_LEAF_LIGHT, 88, 118, 62);
-set(COL_LEAF_AUTUMN, 156, 116, 48);
-
-set(COL_PINE, 46, 78, 52);
-set(COL_PINE_DARK, 34, 60, 42);
 
 set(COL_PALM, 80, 116, 58);
 set(COL_BUSH, 62, 92, 46);

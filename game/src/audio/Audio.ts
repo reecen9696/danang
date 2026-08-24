@@ -75,6 +75,14 @@ const SAMPLES: Readonly<Record<string, SampleDef>> = {
   rifle: { file: 'shot-762x54r', gain: 0.9, jitter: 0.03, voices: 6 },
   shotgun: { file: 'shot-762x39', gain: 1, rate: 0.74, jitter: 0.03, sub: [120, 45, 0.26, 0.3] },
   rocket: { file: 'shot-762x54r', gain: 0.85, rate: 0.52, jitter: 0.02, sub: [90, 38, 0.4, 0.26] },
+  // The door gun. The 7.62 take pitched down and given a low sub: an M60 is
+  // the same round the rifle fires, out of a much heavier gun, and the weight
+  // is entirely in what you feel under it rather than in the crack itself.
+  // More voices than the SMG, because it empties a hundred-round belt.
+  m60: { file: 'shot-762x54r', gain: 0.7, rate: 0.82, jitter: 0.04, voices: 10, tail: 0.8, sub: [110, 52, 0.14, 0.18], fallback: 'rifle' },
+  // The Thumper is named for the noise it makes: almost no crack at all, just
+  // a hollow pop as the round leaves. Slow rate, short tail, nothing under it.
+  m79: { file: 'shot-22lr', gain: 0.85, rate: 0.44, jitter: 0.03, tail: 0.45, sub: [180, 90, 0.12, 0.2], fallback: 'rocket' },
   explosion: { file: 'shot-762x54r', gain: 0.85, rate: 0.4, jitter: 0.05, synth: true },
 
   'reload-pistol-out': { file: 'reload-pistol-out', gain: 0.6, fallback: 'reload' },
@@ -105,6 +113,23 @@ const SAMPLES: Readonly<Record<string, SampleDef>> = {
   'death-cry': {
     file: 'death-cry-a', alts: ['death-cry-b'],
     gain: 1, jitter: 0.05, voices: 3, range: 90, muffle: 2400, fallback: 'death',
+  },
+
+  // The field going up. Half the people in the paddy have a voice and half of
+  // them run without a sound (see fx/Farmers.ts), and which of the two you get
+  // is the only thing in the game that says how old the person you shot at was.
+  //
+  // Ranged further than a death cry on purpose: the parapet is a long way above
+  // the paddy, and a round going wide down there has to be audible from up here
+  // or it costs nothing. Two takes each, for the same reason the death cries
+  // have two -- a field of people running is not one clip on repeat.
+  'scream-woman': {
+    file: 'scream-woman-a', alts: ['scream-woman-b'],
+    gain: 0.9, jitter: 0.06, voices: 3, range: 150, muffle: 2600, fallback: 'death',
+  },
+  'scream-child': {
+    file: 'scream-child-a', alts: ['scream-child-b'],
+    gain: 0.85, jitter: 0.06, voices: 3, range: 150, muffle: 3000, fallback: 'death',
   },
 };
 

@@ -12,7 +12,19 @@ export interface CoverSpot {
   quality: number;
 }
 
-const CANDIDATE_DIRS = 8;
+const CANDIDATE_DIRS = 12;
+
+/**
+ * Body heights as fractions of the standing height, matching Bot.poseHeight.
+ *
+ * Cover is rated against the *ducked* chest and the *standing* eye, because
+ * that's the deal a parapet actually offers: get down and it covers you, stand
+ * up and you can shoot over it. Rating it against the standing chest instead
+ * throws away every wall under about waist height — which is most of the cover
+ * on a voxel map, and all of the cover the bots build themselves.
+ */
+const DUCKED_CHEST = 0.66 * 0.55;
+const STANDING_EYE = 0.82;
 
 /**
  * Cheap prefilter: is there something solid immediately between this spot and
@@ -25,21 +37,26 @@ function hasNearbyShield(
   x: number, y: number, z: number,
   towardX: number, towardZ: number,
 ): boolean {
+  const low = Math.floor(y);
   const chest = Math.floor(y + 1);
   for (let step = 1; step <= 2; step++) {
     const sx = Math.floor(x + towardX * step);
     const sz = Math.floor(z + towardZ * step);
-    if (world.isSolid(sx, chest, sz)) return true;
+    // A single course of blocks at foot height is still a parapet to duck
+    // behind, so the prefilter has to look there as well as at chest height.
+    if (world.isSolid(sx, low, sz) || world.isSolid(sx, chest, sz)) return true;
   }
   return false;
 }
 
 /**
- * Rates a standing position against a shooter.
+ * Rates a position against a shooter.
  *
  * The good spot isn't the one that hides you — that's a spot you can't fight
- * from. It's the one that hides your chest while leaving your eyeline clear, so
- * you're shooting over the top of something instead of standing beside it.
+ * from. It's the one that hides you when you're down and lets you see when
+ * you're up, so you're shooting over the top of something rather than standing
+ * beside it. So the chest is measured ducked and the eyeline standing: quality
+ * 2 is a firing position, quality 1 is a hole to sit in.
  */
 export function rateCover(
   world: VoxelWorld,
@@ -47,12 +64,14 @@ export function rateCover(
   height: number,
   px: number, py: number, pz: number,
 ): number {
-  const chestY = footY + height * 0.55;
-  const eyeY = footY + height * 0.82;
-  const chestClear = hasLineOfSight(world, px, py, pz, x, chestY, z);
-  if (chestClear) return 0;
-  const eyeClear = hasLineOfSight(world, px, py, pz, x, eyeY, z);
-  return eyeClear ? 2 : 1;
+  const duckedChestY = footY + height * DUCKED_CHEST;
+  if (hasLineOfSight(world, px, py, pz, x, duckedChestY, z)) return 0;
+
+  // Something covers the ducked body. Can it be fought from? Only if standing
+  // back up clears the top of it — otherwise this is a hole to sit in, not a
+  // firing position.
+  const eyeY = footY + height * STANDING_EYE;
+  return hasLineOfSight(world, px, py, pz, x, eyeY, z) ? 2 : 1;
 }
 
 /**
@@ -70,7 +89,7 @@ export function findCoverSpot(
   biasX: number, biasZ: number,
   out: CoverSpot,
 ): boolean {
-  const radius = 3.5 + (bot.phase % 1) * 3;
+  const radius = 3 + (bot.phase % 1) * 4;
   const height = bot.def.height;
   const bx = bot.position.x;
   const bz = bot.position.z;

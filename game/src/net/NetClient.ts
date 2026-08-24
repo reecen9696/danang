@@ -142,10 +142,6 @@ export class NetClient {
     this.room.send('points', { points });
   }
 
-  sendReady(): void {
-    this.room.send('ready');
-  }
-
   // -------------------------------------------------------------- inbound --
   readWaveState(): NetWaveState {
     const s = this.room.state as unknown as NetWaveState;

@@ -6,6 +6,12 @@ export class WeaponState {
   ammo: number;
   stock: number;
 
+  /**
+   * Reserve capacity multiplier. The Bandolier raises it, so `def.maxStock` is
+   * the base number of rounds a weapon carries rather than the hard ceiling.
+   */
+  capacityScale = 1;
+
   cooldown = 0;
   reloading = false;
   reloadTimer = 0;
@@ -20,6 +26,11 @@ export class WeaponState {
 
   get id(): WeaponId {
     return this.def.id;
+  }
+
+  /** How much reserve ammo this weapon can hold right now. */
+  get capacity(): number {
+    return Math.round(this.def.maxStock * this.capacityScale);
   }
 
   get needsAmmo(): boolean {
@@ -71,12 +82,17 @@ export class WeaponState {
   }
 
   refill(): void {
-    this.stock = this.def.maxStock;
+    this.stock = this.capacity;
     this.ammo = this.def.clipSize;
   }
 
   addStock(rounds: number): void {
-    this.stock = Math.min(this.def.maxStock, this.stock + rounds);
+    this.stock = Math.min(this.capacity, this.stock + rounds);
+  }
+
+  /** Adds a fraction of a full reserve — what an ammo box or a crate gives. */
+  addFraction(fraction: number): void {
+    this.addStock(Math.ceil(this.capacity * fraction));
   }
 
   /** Returns true on the frame a reload completes (per shell for shotguns). */

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
   <title>Ace Defense</title>
-  <meta name="description" content="Voxel FPS wave-survival — dig, build and defend your fort against escalating waves." />
+  <meta name="description" content="Voxel FPS survival — dig, build and defend your village against raids that come without warning." />
 </head>
 <body>
   <div id="app"></div>
@@ -33,42 +33,43 @@
 
     <div id="prompt"></div>
 
-    <div id="vitals" class="panel">
-      <div class="stat-row"><span>HEALTH</span><b id="hp-text">100</b></div>
-      <div id="hp-bar"><div id="hp-fill" class="high"></div></div>
-      <div class="stat-row"><span>LIVES</span><b id="tickets">3</b></div>
-      <div class="stat-row"><span id="mat-label">DIRT</span><b id="block-count">50</b></div>
-    </div>
+    <!-- How close the jungle is to noticing you. See HUD.setDetection. -->
+
+    <!-- No health bar, no lives and no material tally: the only vitals
+         readout is #low-hp, the blood closing in from the screen edges. -->
 
     <div id="topright">
-      <div id="points">0</div>
-      <div id="points-label">POINTS</div>
-      <div id="minimap-wrap" class="panel">
+      <div id="points">$0.00</div>
+      <div id="minimap-wrap">
         <canvas id="minimap" width="150" height="150"></canvas>
         <div id="compass">N</div>
       </div>
     </div>
 
-    <div id="ammo-box" class="panel">
-      <div id="class-chip">RIFLEMAN <span>TAB</span></div>
-      <div id="weapon-name">Pistol</div>
-      <div id="ammo-icons"></div>
-      <div id="ammo">8<span class="reserve"> / 96</span></div>
+    <!-- Held weapon, what is in it, and how many grenades are left. -->
+    <div id="ammo-box">
       <div id="reload-hint"></div>
-    </div>
-
-    <div id="wave-box" class="panel">
-      <div id="wave-label">PREPARE</div>
-      <div id="wave-value">WAVE 1</div>
-      <div id="wave-bar"><div id="wave-bar-fill"></div></div>
-      <div id="wave-sub"></div>
+      <div id="ammo-row">
+        <div id="held">
+          <div id="weapon-icon"></div>
+          <div id="held-name"></div>
+        </div>
+        <div id="ammo">
+          <b id="ammo-clip">0</b>
+          <span id="ammo-reserve"></span>
+        </div>
+        <div id="ammo-sep"></div>
+        <div id="gren">
+          <b id="gren-count">00</b>
+          <div id="gren-icon"></div>
+        </div>
+      </div>
     </div>
 
     <div id="blocks-box" class="panel">
       <div id="mat-list"></div>
     </div>
 
-    <div id="log" ><div id="log-lines"></div></div>
 
     <div id="perf"></div>
   </div>
@@ -90,23 +91,6 @@
   </div>
 
   <!-- ------------------------------------------------------------------ -->
-  <!-- Class picker                                                        -->
-  <!-- ------------------------------------------------------------------ -->
-  <div id="class-menu">
-    <div id="class-inner">
-      <div id="class-head">
-        <div id="class-title">CHOOSE YOUR CLASS</div>
-      </div>
-      <div id="class-hint">
-        Your class is your primary weapon &middot; the pistol, spade, blocks and
-        grenades come with all three
-      </div>
-      <div id="class-grid"></div>
-      <div id="class-close">TAB or ESC to close &mdash; the wave does not wait for you.</div>
-    </div>
-  </div>
-
-  <!-- ------------------------------------------------------------------ -->
   <!-- Overlays                                                            -->
   <!-- ------------------------------------------------------------------ -->
   <div id="loading" class="overlay">
@@ -117,36 +101,73 @@
   </div>
 
   <div id="start" class="overlay hidden">
-    <h1>ACE DEFENSE</h1>
-    <h2>DIG. BUILD. HOLD THE LINE.</h2>
-    <p>
-      Waves of armed bots advance on your fort. Their bullets and rockets
-      permanently destroy your walls, and the damage carries over between
-      rounds. Earn points from every hit and every kill, then spend them at the
-      merchants in town during the prep phase.
-    </p>
-    <div id="controls-grid">
-      <b>W A S D</b><span>Move</span>
-      <b>Mouse</b><span>Look &middot; Left fire &middot; Right aim / pick colour</span>
-      <b>Space / Ctrl / Shift</b><span>Jump &middot; Crouch &middot; Sprint</span>
-      <b>V</b><span>Sneak (silent)</span>
-      <b>1 2 3 4</b><span>Spade &middot; Blocks &middot; Gun &middot; Grenade</span>
-      <b>Tab</b><span>Change class (rifle / SMG / shotgun)</span>
-      <b>R</b><span>Reload</span>
-      <b>E</b><span>Interact / open merchant / ready up</span>
-      <b>Q / Scroll</b><span>Cycle block material</span>
-      <b>Arrows</b><span>Cycle block colour</span>
-      <b>F3</b><span>Performance overlay</span>
-      <b>ESC</b><span>Pause</span>
+    <img id="start-logo" alt="VietKong: Delta Divers" />
+    <div id="lobby">
+      <div id="lobby-head">
+        <span>ACTIVE PLAYERS</span><b id="lobby-count">0</b>
+      </div>
+      <div id="lobby-list"></div>
     </div>
-    <div class="cta" id="start-btn">START RUN</div>
+
+    <!-- Drop-in class pick: name and gun, nothing else. It is the only place
+         the class is chosen -- you land with what you picked here. -->
+    <div id="class-select"></div>
+
+    <div class="cta" id="start-btn">JOIN</div>
   </div>
 
-  <div id="pause" class="overlay hidden">
-    <h1>PAUSED</h1>
-    <div id="pause-stats"></div>
-    <div class="cta" id="resume-btn">RESUME</div>
-    <p>Click the button or press ESC to get back in.</p>
+  <!-- ESC. A card in the middle of the screen, not a full-screen takeover:
+       the run is paused behind it and you can still see where you were. -->
+  <div id="pause" class="hidden">
+    <div id="pause-card">
+      <div id="pause-head">
+        <span>PAUSED</span>
+        <b id="pause-stats"></b>
+      </div>
+
+      <div id="keys">
+        <div class="key-group">
+          <h3>Move</h3>
+          <div class="key"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Walk</span></div>
+          <div class="key"><kbd>Shift</kbd><span>Sprint</span></div>
+          <div class="key"><kbd>Ctrl</kbd><span>Crouch</span></div>
+          <div class="key"><kbd>V</kbd><span>Sneak &mdash; quiet, and harder to spot</span></div>
+          <div class="key"><kbd>Space</kbd><span>Jump</span></div>
+        </div>
+
+        <div class="key-group">
+          <h3>Fight</h3>
+          <div class="key"><kbd>LMB</kbd><span>Fire &middot; dig &middot; place</span></div>
+          <div class="key"><kbd>RMB</kbd><span>Aim down sights</span></div>
+          <div class="key"><kbd>R</kbd><span>Reload</span></div>
+          <div class="key"><kbd>G</kbd><span>Grenade</span></div>
+          <div class="key"><kbd>Wheel</kbd><span>Cycle guns, blocks or gear</span></div>
+        </div>
+
+        <div class="key-group">
+          <h3>Gear</h3>
+          <div class="key"><kbd>1</kbd><span>Gun &mdash; tap again to swap weapon</span></div>
+          <div class="key"><kbd>2</kbd><span>Spade</span></div>
+          <div class="key"><kbd>3</kbd><span>Blocks</span></div>
+          <div class="key"><kbd>4</kbd><span>Grenades</span></div>
+          <div class="key"><kbd>5</kbd><span>Build &mdash; <b>hold</b> to pick what to build</span></div>
+        </div>
+
+        <div class="key-group">
+          <h3>Build &amp; use</h3>
+          <div class="key"><kbd>Q</kbd><span>Next material &middot; rotate what you are placing</span></div>
+          <div class="key"><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><span>Block colour</span></div>
+          <div class="key"><kbd>C</kbd><span>Snap colour back to the material</span></div>
+          <div class="key"><kbd>E</kbd><span>Use &middot; open a merchant &middot; ready up</span></div>
+          <div class="key"><kbd>B</kbd><span>Merchant, when you are stood at one</span></div>
+        </div>
+      </div>
+
+      <div id="pause-foot">
+        <span><kbd>F3</kbd> stats &middot; <kbd>F4</kbd> shadows &middot; <kbd>ESC</kbd> back to it</span>
+        <div class="cta" id="resume-btn">RESUME</div>
+      </div>
+    </div>
   </div>
 
   <div id="gameover" class="overlay hidden">

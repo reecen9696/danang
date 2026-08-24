@@ -18,6 +18,8 @@ import { NavGrid } from '../../../game/src/ai/NavGrid';
 import { BotManager } from '../../../game/src/ai/BotManager';
 import type { Bot } from '../../../game/src/ai/Bot';
 import { WaveManager, Phase } from '../../../game/src/game/WaveManager';
+import { Aggression } from '../../../game/src/game/Aggression';
+import { TunnelNetwork } from '../../../game/src/ai/TunnelNetwork';
 import { BotKind } from '../../../game/src/ai/botTypes';
 
 export { Phase, BotKind };
@@ -59,6 +61,14 @@ export class ServerSim {
   readonly nav: NavGrid;
   readonly bots: BotManager;
   readonly waves: WaveManager;
+  /** The tunnels under this room's copy of the valley. */
+  readonly tunnels = new TunnelNetwork();
+  /**
+   * Server rooms have no villagers to shoot — the paddy is client-side scenery
+   * — so nothing here can anger the valley. Held anyway so the schedule reads
+   * the same code as the single-player one rather than a second copy of it.
+   */
+  private readonly aggression = new Aggression();
 
   /**
    * Every edit made since the world was generated, in order.
@@ -103,15 +113,25 @@ export class ServerSim {
       onFire: (bot, tx, ty, tz) => this.events.onBotFire(bot, tx, ty, tz),
       onBreach: (bot, x, y, z) => this.breach(x, y, z),
       onBuild: (_bot, x, y, z, color, material) => this.build(x, y, z, color, material),
+      onDig: (_bot, x, y, z) => this.dig(x, y, z),
       onVoice: (bot, cue) => this.events.onBotVoice(bot, cue),
       onDeath: (bot) => this.events.onBotDeath(bot),
+      // The room owns the tunnels the same way it owns the terrain: they are
+      // voxel edits, so they replicate through the op log like anything else,
+      // and every client's copy of the map grows the same holes.
+      tunnels: this.tunnels,
+      aggression: 0,
     });
+
+    for (const h of this.layout.spiderHoles) {
+      this.tunnels.add(h.x, h.z, h.floorY, h.standX, h.y, h.standZ, false);
+    }
 
     this.waves = new WaveManager(this.bots, this.layout.spawnPoints, {
       onPhaseChange: (phase, wave) => this.events.onPhaseChange(phase, wave),
       onAnnounce: (text, tone) => this.events.onAnnounce(text, tone ?? 'info'),
       onWaveCleared: (wave) => this.events.onWaveCleared(wave),
-    });
+    }, this.aggression);
   }
 
   // -------------------------------------------------------------- players --
@@ -151,6 +171,17 @@ export class ServerSim {
   }
 
   private breach(x: number, y: number, z: number): void {
+    const op: VoxelOp = { op: 1, x, y, z, color: 0, mat: 0 };
+    if (this.applyOp(op)) this.events.onVoxelOp(op);
+  }
+
+  /**
+   * A tunnel rat cutting its shaft. Same op as a breach — the block goes — but
+   * it is worth its own name because it is what makes the network grow, and
+   * because it replicates like any other edit, so every client's ground opens
+   * the same holes.
+   */
+  private dig(x: number, y: number, z: number): void {
     const op: VoxelOp = { op: 1, x, y, z, color: 0, mat: 0 };
     if (this.applyOp(op)) this.events.onVoxelOp(op);
   }

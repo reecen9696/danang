@@ -33,6 +33,17 @@ export class Squad {
   activeBound = 0;
   private boundTimer = 0;
 
+  // --- ambush --------------------------------------------------------------
+  /**
+   * Countdown to the squad's burrowers coming up together.
+   *
+   * The first rat to reach its mouth starts this; anyone who arrives while it
+   * runs inherits whatever is left of it. That one shared number is the whole
+   * of the coordination, and it's what turns four men surfacing into an
+   * ambush rather than four men queueing to be shot.
+   */
+  ambushTimer = 0;
+
   // --- siege ---------------------------------------------------------------
   /** The one wall voxel the whole squad works on, or -1. */
   breachX = -1;
@@ -48,6 +59,12 @@ export class Squad {
    * same base come at it from different faces instead of forming one queue.
    */
   approachBearing = 0;
+
+  /**
+   * The outpost this squad mans, or null for a wave squad. Camps fight as
+   * units: one sentry seeing you is the camp seeing you, and no further.
+   */
+  post: { x: number; z: number } | null = null;
 
   private assignTimer = 0;
 
@@ -88,6 +105,7 @@ export class Squad {
 
   update(dt: number): void {
     this.contactAge += dt;
+    if (this.ambushTimer > 0) this.ambushTimer = Math.max(0, this.ambushTimer - dt);
     if (this.contactAge > CONTACT_MEMORY) this.hasContact = false;
 
     this.spotters = 0;
@@ -209,9 +227,35 @@ export class SquadManager {
   readonly squads: Squad[] = [];
   private nextId = 0;
 
-  /** Puts a freshly spawned bot into the newest squad with room. */
+  /**
+   * Puts a freshly spawned bot into the newest squad with room.
+   *
+   * Burrowers are kept together. A squad is only worth anything to a tunnel rat
+   * for one thing — the shared clock that has them all come up at once — and a
+   * lone rat in a squad of riflemen has nobody to come up with. Grouping them
+   * is what turns "an enemy pops out of the ground" into "the ground opens on
+   * three sides of you".
+   */
   enlist(bot: Bot): Squad {
+    if (bot.def.burrower) {
+      for (let i = this.squads.length - 1; i >= 0; i--) {
+        const s = this.squads[i];
+        if (s.size >= SQUAD_SIZE) continue;
+        if (!s.members.every((m) => m.def.burrower)) continue;
+        s.add(bot);
+        return s;
+      }
+      const fresh = new Squad(this.nextId, (this.nextId * 2.399963) % (Math.PI * 2));
+      this.nextId++;
+      this.squads.push(fresh);
+      fresh.add(bot);
+      return fresh;
+    }
+
     let squad = this.squads.length > 0 ? this.squads[this.squads.length - 1] : null;
+    // A rat's squad is not a home for a rifleman either — the alternation that
+    // squad is running is an ambush clock, not a bounding overwatch.
+    if (squad !== null && squad.size > 0 && squad.members[0].def.burrower) squad = null;
     if (squad === null || squad.size >= SQUAD_SIZE) {
       // Golden-angle stagger: consecutive squads never share a bearing.
       squad = new Squad(this.nextId, (this.nextId * 2.399963) % (Math.PI * 2));
@@ -220,6 +264,43 @@ export class SquadManager {
     }
     squad.add(bot);
     return squad;
+  }
+
+  /**
+   * Moves a freshly enlisted bot into the squad holding a given post, opening
+   * one if there isn't a squad there yet.
+   *
+   * Garrisons have to be their own units. Enlisting them the normal way drops
+   * them into whichever squad the last wave left half-full, which would have a
+   * camp forty blocks away sharing sightings with men attacking the base — so a
+   * player creeping past one outpost would be reported by another.
+   */
+  assignPost(bot: Bot, postX: number, postZ: number): Squad {
+    for (const s of this.squads) {
+      if (!s.post) continue;
+      if (Math.hypot(s.post.x - postX, s.post.z - postZ) > 1) continue;
+      if (s.size >= SQUAD_SIZE) break;
+      this.detach(bot);
+      s.add(bot);
+      return s;
+    }
+
+    this.detach(bot);
+    const squad = new Squad(this.nextId, Math.atan2(postX, postZ));
+    this.nextId++;
+    squad.post = { x: postX, z: postZ };
+    this.squads.push(squad);
+    squad.add(bot);
+    return squad;
+  }
+
+  /** Takes a bot out of whatever squad it is currently in. */
+  private detach(bot: Bot): void {
+    const from = bot.squad;
+    if (from === null) return;
+    const i = from.members.indexOf(bot);
+    if (i >= 0) from.members.splice(i, 1);
+    bot.squad = null;
   }
 
   update(dt: number): void {

@@ -126,7 +126,29 @@ export const PHYS = {
   stepSmoothRate: 14,
 } as const;
 
-export const PLAYER_MAX_HP = 100;
+/**
+ * There is no health bar and there are no lives.
+ *
+ * What the player has is a punishment pool: every hit spends some of it, the
+ * screen bleeds in from the edges as it empties, and it refills on its own
+ * once nobody has landed anything for a few seconds. Break contact and you
+ * recover; stay in the open and the next burst puts you down. The pool is
+ * never shown as a number anywhere in the UI -- the vignette *is* the readout.
+ */
+export const VITALS = {
+  /** Damage absorbed before you go down. 100 so upgrades read as percent. */
+  pool: 100,
+  /** Seconds of not being hit before the pool starts coming back. */
+  regenDelay: 4.5,
+  /** Pool per second once it is going -- a little over three seconds to full. */
+  regenRate: 34,
+  /** Seconds spent easing from nothing up to `regenRate`, so it starts gently. */
+  regenRamp: 0.9,
+  /** At or below this fraction of the pool the vignette pulses. */
+  criticalAt: 0.35,
+} as const;
+
+export const PLAYER_MAX_HP: number = VITALS.pool;
 
 // ---------------------------------------------------------------------------
 // Rendering

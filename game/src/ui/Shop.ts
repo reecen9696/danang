@@ -1,8 +1,10 @@
 import { Economy, ShopKind, itemsFor, type ShopItem } from '../game/Economy';
+import { money } from './format';
 
 const TABS: { kind: ShopKind; label: string }[] = [
   { kind: ShopKind.Weapons, label: 'WEAPONS' },
   { kind: ShopKind.Materials, label: 'MATERIALS' },
+  { kind: ShopKind.Defense, label: 'DEFENSES' },
   { kind: ShopKind.Utility, label: 'UTILITY' },
 ];
 
@@ -67,7 +69,7 @@ export class ShopUI {
   }
 
   render(): void {
-    this.pointsEl.textContent = `${this.economy.points.toLocaleString()} pts`;
+    this.pointsEl.textContent = money(this.economy.points);
 
     for (const tab of Array.from(this.tabsEl.children) as HTMLElement[]) {
       tab.classList.toggle('active', tab.dataset.kind === this.active);
@@ -92,7 +94,7 @@ export class ShopUI {
       name.textContent = item.name;
       const cost = document.createElement('span');
       cost.className = 'cost';
-      cost.textContent = soldOut ? 'OWNED' : `${price.toLocaleString()}`;
+      cost.textContent = soldOut ? 'OWNED' : money(price);
       row.append(name, cost);
 
       const desc = document.createElement('div');

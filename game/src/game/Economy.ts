@@ -1,5 +1,6 @@
 import { Mat } from '../core/constants';
 import { WeaponId } from '../weapons/definitions';
+import { DeployId } from './Deployables';
 
 /** Point awards (GDD section 6.1). */
 export const POINTS = {
@@ -14,16 +15,20 @@ export const POINTS = {
 export const enum ShopKind {
   Weapons = 'weapons',
   Materials = 'materials',
+  Defense = 'defense',
   Utility = 'utility',
 }
 
 export const enum ItemEffect {
   RefillAmmo = 'refill-ammo',
+  AmmoBox = 'ammo-box',
+  Bandolier = 'bandolier',
+  GiveDeployable = 'give-deployable',
+  TurretAmmo = 'turret-ammo',
   GiveGrenades = 'give-grenades',
   GiveBlocks = 'give-blocks',
   RepairAll = 'repair-all',
-  MaxHealth = 'max-health',
-  ExtraLife = 'extra-life',
+  Toughness = 'toughness',
   FastReload = 'fast-reload',
   Speed = 'speed',
   Scope = 'scope',
@@ -39,6 +44,7 @@ export interface ShopItem {
   /** Weapon granted, block material, quantity — depends on the effect. */
   readonly weapon?: WeaponId;
   readonly material?: Mat;
+  readonly deployable?: DeployId;
   readonly amount?: number;
   /** Can only be bought once per run. */
   readonly once?: boolean;
@@ -49,8 +55,8 @@ export interface ShopItem {
 export const SHOP_ITEMS: readonly ShopItem[] = [
   // --- Weapon Merchant -----------------------------------------------------
   // The rifle, SMG and shotgun aren't sold: they're the three classes, and
-  // TAB swaps between them for free. This stall covers what a class *can't*
-  // give you -- consumables and the one weapon upgrade.
+  // which one you carry is settled before the drop. This stall covers what a
+  // class *can't* give you -- consumables and the one weapon upgrade.
   {
     id: 'grenades', shop: ShopKind.Weapons, name: 'Grenades x3', cost: 500,
     description: '130 damage in the blast radius, and it dents walls.',
@@ -58,8 +64,18 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   },
   {
     id: 'ammo', shop: ShopKind.Weapons, name: 'Ammo Refill', cost: 150,
-    description: 'Tops up reserve ammo for every weapon you own.',
+    description: 'Fills reserve ammo on every weapon you own, and reloads any sentry turrets you have out.',
     effect: ItemEffect.RefillAmmo,
+  },
+  {
+    id: 'ammo-box', shop: ShopKind.Weapons, name: 'Ammo Box', cost: 400,
+    description: 'Half a reserve on every weapon, on top of a refill. Buy it as many times as you can afford.',
+    effect: ItemEffect.AmmoBox, amount: 50,
+  },
+  {
+    id: 'bandolier', shop: ShopKind.Weapons, name: 'Bandolier', cost: 900,
+    description: 'Carry 50% more reserve ammo for every weapon, for the rest of the run. Refills you on the spot.',
+    effect: ItemEffect.Bandolier, once: true,
   },
   {
     id: 'scope', shop: ShopKind.Weapons, name: 'Rifle Scope', cost: 1000,
@@ -99,16 +115,41 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
     effect: ItemEffect.RepairAll, escalate: 1.25,
   },
 
-  // --- Utility Merchant ----------------------------------------------------
+  // --- Defense Merchant ----------------------------------------------------
+  // Everything here is bought as stock and then physically put down with the
+  // deploy slot (5), so the price is for the thing, not for it being useful --
+  // where you stand it is the rest of the cost.
   {
-    id: 'max-hp', shop: ShopKind.Utility, name: '+25 Max Health', cost: 1800,
-    description: 'Permanently raises your maximum health for this run.',
-    effect: ItemEffect.MaxHealth, amount: 25, escalate: 1.6,
+    id: 'barricade', shop: ShopKind.Defense, name: 'Sandbag Barricade x3', cost: 450,
+    description: 'A 3-wide, 2-high sandbag wall that drops in one piece. Same HP as reinforced block.',
+    effect: ItemEffect.GiveDeployable, deployable: DeployId.Barricade, amount: 3,
   },
   {
-    id: 'life', shop: ShopKind.Utility, name: 'Respawn Ticket', cost: 2500,
-    description: 'One more chance when you go down.',
-    effect: ItemEffect.ExtraLife, amount: 1, escalate: 1.4,
+    id: 'firing-barricade', shop: ShopKind.Defense, name: 'Firing Barricade x2', cost: 600,
+    description: 'Sandbags with a loophole in the middle: crouch behind it for full cover and keep shooting.',
+    effect: ItemEffect.GiveDeployable, deployable: DeployId.FiringBarricade, amount: 2,
+  },
+  {
+    id: 'turret', shop: ShopKind.Defense, name: 'Sentry Turret', cost: 2200,
+    description: 'Auto-tracks anything it can see out to 40 blocks. Holds 260 rounds; four out at once.',
+    effect: ItemEffect.GiveDeployable, deployable: DeployId.Turret, amount: 1, escalate: 1.35,
+  },
+  {
+    id: 'turret-ammo', shop: ShopKind.Defense, name: 'Turret Drum', cost: 350,
+    description: 'Reloads every sentry you have standing.',
+    effect: ItemEffect.TurretAmmo,
+  },
+  {
+    id: 'ammo-crate', shop: ShopKind.Defense, name: 'Ammo Crate', cost: 800,
+    description: 'Four resupplies, taken with E — and it works mid-wave, when the merchants are shut.',
+    effect: ItemEffect.GiveDeployable, deployable: DeployId.AmmoCrate, amount: 1, escalate: 1.2,
+  },
+
+  // --- Utility Merchant ----------------------------------------------------
+  {
+    id: 'toughness', shop: ShopKind.Utility, name: 'Flak Vest', cost: 1800,
+    description: 'Plate and padding: soak a quarter more fire before you go down, for the rest of the run.',
+    effect: ItemEffect.Toughness, amount: 25, escalate: 1.6,
   },
   {
     id: 'fast-reload', shop: ShopKind.Utility, name: 'Fast Hands', cost: 1400,

@@ -41,6 +41,11 @@ gameServer.define('defense', DefenseRoom);
 
 gameServer.listen(port).then(() => {
   console.log(`[ace-defense] listening on :${port}`);
+  // PM2 (which is how Colyseus Cloud runs us) is configured with
+  // `wait_ready: true`, so it holds the instance in "launching" until this
+  // arrives. Under `node build/index.js` there is no parent to send to and
+  // process.send is undefined — hence the guard.
+  process.send?.('ready');
 }).catch((err) => {
   console.error('[ace-defense] failed to start', err);
   process.exit(1);

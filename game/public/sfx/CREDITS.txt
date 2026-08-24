@@ -20,6 +20,15 @@ Death cries: death-cry-a, death-cry-b — two takes played at random when a bot
 is killed, loudness-matched to the voice takes and trimmed head and tail so the
 cry lands on the frame the man drops. Regenerate with tools/prep-death.sh.
 
+Civilian screams: scream-woman-a/b and scream-child-a/b, played when someone
+in the paddy is shot at or is running from a round that went past. Half the
+field has a voice and half of it runs silently, and which of the two takes you
+hear follows the body scale (see src/fx/Farmers.ts). Cut from two long takes
+downloaded as "Scary Woman Screaming - Sound Effect (HD)" and "loud kid
+screaming sound effect", two clips each so a field emptying is not one clip on
+repeat, loudness-matched to the death cries. Regenerate with
+tools/prep-screams.sh.
+
 Jungle ambience: "Tropical Jungle Birds" by placidplace (Pixabay, 108380).
 
 ambience-jungle is a 60 s seamless loop cut from the ten-minute original: the
