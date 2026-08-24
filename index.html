@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Ace Defense</title>
+  <meta name="description" content="Voxel FPS survival — dig, build and defend your village against raids that come without warning." />
+  <script type="module" crossorigin src="./assets/index-DgtHrJjP.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/three-DIhhM2n7.js">
+  <link rel="stylesheet" crossorigin href="./assets/index-Bw2u7xP4.css">
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <!-- HUD                                                                 -->
+  <!-- ------------------------------------------------------------------ -->
+  <div id="hud">
+    <!-- Four quadrants of the original Sight.png, spread by the weapon cone. -->
+    <div id="crosshair">
+      <span class="q q0"></span>
+      <span class="q q1"></span>
+      <span class="q q2"></span>
+      <span class="q q3"></span>
+      <span class="dot"></span>
+    </div>
+
+    <div id="hitmarker"></div>
+    <div id="popups"></div>
+    <div id="damage-flash">
+      <span class="edge top"></span>
+      <span class="edge bottom"></span>
+    </div>
+    <div id="low-hp"></div>
+    <div id="announce"></div>
+
+    <div id="prompt"></div>
+
+    <!-- How close the jungle is to noticing you. See HUD.setDetection. -->
+
+    <!-- No health bar, no lives and no material tally: the only vitals
+         readout is #low-hp, the blood closing in from the screen edges. -->
+
+    <div id="topright">
+      <div id="points">$0.00</div>
+      <div id="minimap-wrap">
+        <canvas id="minimap" width="150" height="150"></canvas>
+        <div id="compass">N</div>
+      </div>
+    </div>
+
+    <!-- Held weapon, what is in it, and how many grenades are left. -->
+    <div id="ammo-box">
+      <div id="reload-hint"></div>
+      <div id="ammo-row">
+        <div id="held">
+          <div id="weapon-icon"></div>
+          <div id="held-name"></div>
+        </div>
+        <div id="ammo">
+          <b id="ammo-clip">0</b>
+          <span id="ammo-reserve"></span>
+        </div>
+        <div id="ammo-sep"></div>
+        <div id="gren">
+          <b id="gren-count">00</b>
+          <div id="gren-icon"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="blocks-box" class="panel">
+      <div id="mat-list"></div>
+    </div>
+
+
+    <div id="perf"></div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <!-- Shop                                                                -->
+  <!-- ------------------------------------------------------------------ -->
+  <div id="shop">
+    <div id="shop-inner">
+      <div id="shop-head">
+        <div id="shop-title">MERCHANT</div>
+        <div id="shop-points">0</div>
+      </div>
+      <div id="shop-hint">Click to buy &middot; ESC or E to leave</div>
+      <div id="shop-tabs"></div>
+      <div id="shop-grid"></div>
+      <div id="shop-close">Shops are only open during the PREP phase.</div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <!-- Overlays                                                            -->
+  <!-- ------------------------------------------------------------------ -->
+  <div id="loading" class="overlay">
+    <h1>ACE DEFENSE</h1>
+    <h2>BUILDING THE WORLD</h2>
+    <div id="loading-bar"><div id="loading-fill"></div></div>
+    <p id="loading-text">Generating terrain&hellip;</p>
+  </div>
+
+  <div id="start" class="overlay hidden">
+    <img id="start-logo" alt="VietKong: Delta Divers" />
+    <div id="lobby">
+      <div id="lobby-head">
+        <span>ACTIVE PLAYERS</span><b id="lobby-count">0</b>
+      </div>
+      <div id="lobby-list"></div>
+    </div>
+
+    <!-- Drop-in class pick: name and gun, nothing else. It is the only place
+         the class is chosen -- you land with what you picked here. -->
+    <div id="class-select"></div>
+
+    <div class="cta" id="start-btn">JOIN</div>
+  </div>
+
+  <!-- ESC. A card in the middle of the screen, not a full-screen takeover:
+       the run is paused behind it and you can still see where you were. -->
+  <div id="pause" class="hidden">
+    <div id="pause-card">
+      <div id="pause-head">
+        <span>PAUSED</span>
+        <b id="pause-stats"></b>
+      </div>
+
+      <div id="keys">
+        <div class="key-group">
+          <h3>Move</h3>
+          <div class="key"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Walk</span></div>
+          <div class="key"><kbd>Shift</kbd><span>Sprint</span></div>
+          <div class="key"><kbd>Ctrl</kbd><span>Crouch</span></div>
+          <div class="key"><kbd>V</kbd><span>Sneak &mdash; quiet, and harder to spot</span></div>
+          <div class="key"><kbd>Space</kbd><span>Jump</span></div>
+        </div>
+
+        <div class="key-group">
+          <h3>Fight</h3>
+          <div class="key"><kbd>LMB</kbd><span>Fire &middot; dig &middot; place</span></div>
+          <div class="key"><kbd>RMB</kbd><span>Aim down sights</span></div>
+          <div class="key"><kbd>R</kbd><span>Reload</span></div>
+          <div class="key"><kbd>G</kbd><span>Grenade</span></div>
+          <div class="key"><kbd>Wheel</kbd><span>Cycle guns, blocks or gear</span></div>
+        </div>
+
+        <div class="key-group">
+          <h3>Gear</h3>
+          <div class="key"><kbd>1</kbd><span>Gun &mdash; tap again to swap weapon</span></div>
+          <div class="key"><kbd>2</kbd><span>Spade</span></div>
+          <div class="key"><kbd>3</kbd><span>Blocks</span></div>
+          <div class="key"><kbd>4</kbd><span>Grenades</span></div>
+          <div class="key"><kbd>5</kbd><span>Build &mdash; <b>hold</b> to pick what to build</span></div>
+        </div>
+
+        <div class="key-group">
+          <h3>Build &amp; use</h3>
+          <div class="key"><kbd>Q</kbd><span>Next material &middot; rotate what you are placing</span></div>
+          <div class="key"><kbd>&larr;</kbd><kbd>&rarr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><span>Block colour</span></div>
+          <div class="key"><kbd>C</kbd><span>Snap colour back to the material</span></div>
+          <div class="key"><kbd>E</kbd><span>Use &middot; open a merchant &middot; ready up</span></div>
+          <div class="key"><kbd>B</kbd><span>Merchant, when you are stood at one</span></div>
+        </div>
+      </div>
+
+      <div id="pause-foot">
+        <span><kbd>F3</kbd> stats &middot; <kbd>F4</kbd> shadows &middot; <kbd>ESC</kbd> back to it</span>
+        <div class="cta" id="resume-btn">RESUME</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay hidden">
+    <h1 id="go-title">RUN OVER</h1>
+    <h2 id="go-sub"></h2>
+    <div id="stats-grid"></div>
+    <div class="cta" id="restart-btn">NEW RUN</div>
+  </div>
+
+</body>
+</html>
