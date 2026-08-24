@@ -7,7 +7,7 @@ import { BOTS } from '../ai/botTypes';
 import type { NetClient } from '../net/NetClient';
 import { RemotePlayers } from '../net/RemotePlayers';
 import type {
-  BotFireMessage, BotVoiceMessage, ExplodeMessage, InitMessage, VoxelOp,
+  BotFireMessage, BotVoiceMessage, ExplodeMessage, HurtMessage, InitMessage, VoxelOp,
 } from '../net/protocol';
 import { Renderer } from '../core/Renderer';
 import { makeAceFog } from '../core/fog';
@@ -533,6 +533,25 @@ export class Game {
       this.soundForBotWeapon(bot.def.weapon),
       this.distanceToPlayer(bot.position.x, bot.position.y, bot.position.z),
     );
+  }
+
+  /**
+   * You were shot by a squadmate.
+   *
+   * Friendly fire is on, so this resolves exactly like a bot's round: the
+   * damage lands, the screen flashes, and the indicator points back at the
+   * muzzle. The only difference is the kill feed, which names the man who did
+   * it — being shot by your own side should never read as bad luck.
+   */
+  netHurt(m: HurtMessage): void {
+    if (!this.player.alive) return;
+    const wasAlive = this.player.alive;
+    this.damagePlayer(m.damage, m.x, m.z);
+    if (wasAlive && !this.player.alive) {
+      this.hud.log(`${m.name} killed you`, 'bad');
+    } else {
+      this.hud.log(`${m.name} shot you`, 'warn');
+    }
   }
 
   /**
@@ -1729,7 +1748,26 @@ export class Game {
       }
     } else {
       const bot = this.bots.raycast(ox, oy, oz, dx, dy, dz, voxDist);
-      if (bot) {
+      // Friendly fire is on, so a squadmate is swept alongside the enemy and
+      // whichever is nearer takes the round. A man who walks in front of your
+      // muzzle gets shot; that is the whole feature.
+      const mate = this.remotes?.raycast(ox, oy, oz, dx, dy, dz, voxDist) ?? null;
+      const mateFirst = mate !== null && (bot === null || mate.distance < bot.distance);
+
+      if (mateFirst) {
+        endX = ox + dx * mate!.distance;
+        endY = oy + dy * mate!.distance;
+        endZ = oz + dz * mate!.distance;
+        const zone = this.zoneForPlayer(mate!.zoneY, mate!.footY);
+        const dmg = Math.round(damage[zone] * damageMultiplier);
+        this.net?.sendPlayerHit({
+          target: mate!.sessionId, damage: dmg, zone, x: ox, z: oz,
+        });
+        // The victim owns the hp, so the shooter only gets to see that the
+        // round landed — `hitBot` drives the hitmarker back in the caller.
+        this.blood.spatter(endX, endY, endZ, 2, 0.8);
+        hitBot = true;
+      } else if (bot) {
         endX = ox + dx * bot.distance; endY = oy + dy * bot.distance; endZ = oz + dz * bot.distance;
         const zone = this.zoneFor(bot.bot, bot.zoneY);
         killed = this.applyBotDamage(
@@ -1788,6 +1826,20 @@ export class Game {
     );
 
     return { hitBot, killed };
+  }
+
+  /**
+   * Which part of a squadmate a round found.
+   *
+   * Against the standing height, because crouch is not replicated — the same
+   * reason the remote hitbox is the standing one. The thresholds match
+   * `zoneFor` so a headshot is a headshot whoever is on the end of it.
+   */
+  private zoneForPlayer(y: number, footY: number): HitZone {
+    const rel = (y - footY) / PHYS.heightStand;
+    if (rel > 0.78) return HitZone.Head;
+    if (rel < 0.36) return HitZone.Legs;
+    return HitZone.Torso;
   }
 
   private zoneFor(bot: Bot, y: number): HitZone {

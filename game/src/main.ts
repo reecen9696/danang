@@ -102,6 +102,7 @@ async function boot(): Promise<void> {
         onVoxel: (op) => game.applyRemoteOp(op),
         onAnnounce: (m) => game.netAnnounce(m.text, m.tone),
         onBotFire: (m) => game.netBotFire(m),
+        onHurt: (m) => game.netHurt(m),
         onBotVoice: (m) => game.netBotVoice(m),
         onShoot: () => {},
         onExplode: (m) => game.netExplode(m),

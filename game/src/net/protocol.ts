@@ -49,6 +49,37 @@ export interface BlockDamageMessage {
   x: number; y: number; z: number; amount: number;
 }
 
+/**
+ * Client -> server: one player shot another. Friendly fire is on — there are
+ * no teams here, only the squad, so anyone in front of your muzzle is a
+ * target.
+ *
+ * The shooter reports the hit and the victim applies it, which is the same
+ * split the rest of the game uses: you own your own damage taken. It is not
+ * cheat-resistant, and deliberately so — see the server README.
+ */
+export interface PlayerHitMessage {
+  /** Session id of whoever was hit. */
+  target: string;
+  damage: number;
+  /** Where on the body, for the victim's own hit feedback. */
+  zone: number;
+  /** Muzzle position, so the victim's damage indicator points the right way. */
+  x: number; z: number;
+}
+
+/**
+ * Server -> client: you were shot by another player. Carries the shooter's
+ * name so the kill feed can say who, rather than "you died".
+ */
+export interface HurtMessage {
+  from: string;
+  name: string;
+  damage: number;
+  zone: number;
+  x: number; z: number;
+}
+
 /** Server -> client: a bot took a shot; the target client applies the damage. */
 export interface BotFireMessage {
   slot: number;

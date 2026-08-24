@@ -13,8 +13,10 @@ import {
   type BotFireMessage,
   type BotVoiceMessage,
   type ExplodeMessage,
+  type HurtMessage,
   type InitMessage,
   type MoveMessage,
+  type PlayerHitMessage,
   type ShootMessage,
   type VoxelOp,
 } from './protocol';
@@ -38,6 +40,7 @@ export interface NetHandlers {
   onVoxel: (op: VoxelOp) => void;
   onAnnounce: (m: AnnounceMessage) => void;
   onBotFire: (m: BotFireMessage) => void;
+  onHurt: (m: HurtMessage) => void;
   onBotVoice: (m: BotVoiceMessage) => void;
   onShoot: (m: ShootMessage) => void;
   onExplode: (m: ExplodeMessage) => void;
@@ -92,6 +95,7 @@ export class NetClient {
     this.room.onMessage('voxel', (op: VoxelOp) => handlers.onVoxel(op));
     this.room.onMessage('announce', (m: AnnounceMessage) => handlers.onAnnounce(m));
     this.room.onMessage('botFire', (m: BotFireMessage) => handlers.onBotFire(m));
+    this.room.onMessage('hurt', (m: HurtMessage) => handlers.onHurt(m));
     this.room.onMessage('botVoice', (m: BotVoiceMessage) => handlers.onBotVoice(m));
     this.room.onMessage('shoot', (m: ShootMessage) => handlers.onShoot(m));
     this.room.onMessage('explode', (m: ExplodeMessage) => handlers.onExplode(m));
@@ -128,6 +132,11 @@ export class NetClient {
 
   sendBotHit(slot: number, damage: number): void {
     this.room.send('botHit', { slot, damage });
+  }
+
+  /** Report a round that found a squadmate. Friendly fire is on. */
+  sendPlayerHit(m: PlayerHitMessage): void {
+    this.room.send('playerHit', m);
   }
 
   sendShoot(m: ShootMessage): void {

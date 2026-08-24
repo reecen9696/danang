@@ -150,6 +150,39 @@ export class DefenseRoom extends Room<RoomState> {
       }
     });
 
+    /**
+     * One player shot another. Friendly fire is on: there are no teams in a
+     * co-op squad, so the only question is whether the round found a body.
+     *
+     * The server routes rather than adjudicates — the victim applies the
+     * damage and reports the resulting hp on its next `move`, the same split
+     * used for damage taken from bots. Consistent with the rest of the trust
+     * model, and just as cheatable; see the README.
+     */
+    this.onMessage('playerHit', (client, m: {
+      target: string; damage: number; zone: number; x: number; z: number;
+    }) => {
+      if (!m || typeof m.target !== 'string') return;
+      if (!Number.isFinite(m.damage) || m.damage <= 0) return;
+      // Shooting yourself is not a thing, and would let a client launder its
+      // own hp changes through the damage path.
+      if (m.target === client.sessionId) return;
+
+      const victim = this.clients.find((c) => c.sessionId === m.target);
+      const target = this.state.players.get(m.target);
+      if (!victim || !target || !target.alive) return;
+
+      const shooter = this.state.players.get(client.sessionId);
+      victim.send('hurt', {
+        from: client.sessionId,
+        name: shooter?.name || 'Someone',
+        damage: Math.min(500, Math.floor(m.damage)),
+        zone: Number.isFinite(m.zone) ? m.zone : 0,
+        x: Number.isFinite(m.x) ? m.x : target.x,
+        z: Number.isFinite(m.z) ? m.z : target.z,
+      });
+    });
+
     // Purely cosmetic relays: tracers, muzzle flashes, explosion fx.
     this.onMessage('shoot', (client, m: unknown) => {
       this.broadcastExcept(client, 'shoot', { ...(m as object), from: client.sessionId });
