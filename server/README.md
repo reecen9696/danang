@@ -61,20 +61,43 @@ is additive.
 ## Deploying to Colyseus Cloud
 
 You need to be logged in as yourself for this; it cannot be done on your behalf.
+The CLI opens a browser to pick the target application and catches the token on
+`localhost:25678`.
 
 ```bash
-cd server
-npx @colyseus/cloud deploy      # prompts for login on first run
+npx @colyseus/cloud deploy      # from the REPO ROOT, not server/
 ```
 
-Cloud runs `npm install && npm run build && npm start` and sets `PORT`.
-`/health` is there for its probe.
+**Cloud does not upload anything.** The CLI sends only `{applicationId, token,
+remote, branch}`; Cloud then clones that git remote itself. So only what is
+**committed and pushed** is deployed — a clean local build proves nothing if the
+files are still untracked.
 
-**One caveat:** Cloud uploads the deploy directory, and this server's build
-reads `../game/src`. Either deploy from the repo root, or vendor the shared
-modules into `server/src/shared/` before deploying. The Dockerfile takes the
-first approach (build context = repo root) and is the simpler path if Cloud's
-uploader gives you trouble.
+Because Cloud builds from the clone root, the repo root — not `server/` — is the
+deploy root, and there are three root-level pieces that make that work:
+
+| File | Why |
+| --- | --- |
+| `package.json` | Cloud runs `npm install && npm run build && npm start` here; the scripts delegate into `server/`. |
+| `ecosystem.config.js` | Cloud runs the app under PM2 and reads this. `script` points at `server/build/index.js`. |
+| `.npmrc` | `legacy-peer-deps`, for the same reason `server/.npmrc` has it. |
+
+It could not just be `server/`: the build bundles the simulation out of
+`../game/src`, so a clone rooted at `server/` would be missing half its sources.
+
+`instances` is pinned to **1**, against the Cloud template's
+`os.cpus().length`. That default assumes `@colyseus/tools`, which offsets each
+worker's port by `NODE_APP_INSTANCE` and shares a room registry through a
+presence backend. This server is bare `@colyseus/core` with local presence: a
+second worker would fight for the port *and* keep its own private room list, so
+two players joining "the same" match could land on different processes and never
+see each other.
+
+PM2 is configured `wait_ready: true`, so `src/index.ts` calls
+`process.send?.('ready')` once the socket is actually listening. The guard
+matters — under a plain `node build/index.js` there is no parent and
+`process.send` is `undefined`. `/health` is there for Cloud's probe, and `PORT`
+comes from the environment.
 
 Then build the client against the deployed URL:
 
