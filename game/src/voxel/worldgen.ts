@@ -91,10 +91,43 @@ function makeRng(seed: number): () => number {
 
 // ---------------------------------------------------------------------------
 // Map layout
+//
+// The map is a bowl, and every distance below is measured from its middle.
+//
+//   0 ..  28   the firebase: a scraped knoll with four ramps up it
+//   0 .. 108   the flat -- open field, dead level, nothing on it to hide behind
+// 108 .. 205   jungle, thickening from a ragged treeline
+// 205 .. edge  the mountain rim that closes the map
+//
+// Two things run across those bands and are the whole reason the map is
+// navigable. One is the road: a single dirt spine that comes out of the
+// mountains in the east, crosses the flat past the foot of the firebase, and
+// runs back into the jungle in the west, where the village is built along it.
+// The other is the treeline itself -- a continuous ring you can always see from
+// the field, so "which way am I facing" is answerable from anywhere on it.
+//
+// Everything the player has a reason to walk to hangs off one of those two:
+// the wreck and the paddy sit out on the flat inside the treeline, the village
+// sits on the road, and the jungle camps sit off the road or just inside the
+// trees looking out over the grass.
 // ---------------------------------------------------------------------------
 export const BASE_CENTER = { x: WORLD_X / 2, z: WORLD_Z / 2 };
-/** Height of the firebase hilltop's flat top. */
-export const BASE_PLATEAU_Y = 30;
+
+/**
+ * Level of the flat.
+ *
+ * The field is the one part of the map with a height rather than a heightmap:
+ * everything inside the clearing is graded to this, give or take a block of
+ * swell, so that crossing it is walking rather than climbing. That is the
+ * single biggest thing this layout does for movement -- the old map put the
+ * base on a mesa in a valley of lumpy fBm, and getting anywhere meant
+ * scrambling over ground that told you nothing about where you were.
+ */
+export const FIELD_Y = 22;
+
+/** Height of the firebase knoll's flat top. */
+export const BASE_PLATEAU_Y = FIELD_Y + 5;
+
 /**
  * Flat buildable top.
  *
@@ -106,22 +139,104 @@ export const BASE_PLATEAU_Y = 30;
  * of hooches end to end, and everything beyond the wire is cleared field of
  * fire.
  */
-const MESA_TOP_R = 14;
-/** Cliff band — deliberately too steep to climb, so ramps are the way in. */
-const MESA_CLIFF_R = 18;
-const MESA_BLEND_R = 30;
-/** Three approach ramps: the chokepoints the whole defense is built around. */
-const RAMP_COUNT = 3;
-const RAMP_OUTER_R = 30;
-const RAMP_HALF_WIDTH = 4;
+const MESA_TOP_R = 17;
+/**
+ * Cut bank. Five blocks, not the fifteen it used to be.
+ *
+ * The old hill had a genuinely unclimbable cliff round it, which made three
+ * ramps into three chokepoints and made the walk off the hill a chore -- step
+ * off the wrong side of the compound and you were walking a third of the way
+ * round the perimeter to find a way down. Five blocks still costs an attacker
+ * the climb (ai/NavGrid prices it as a ramp job) and still makes the ramps the
+ * obvious way, but a player who wants off the hill can drop off any edge of it
+ * and take the fall.
+ */
+const MESA_CLIFF_R = 21;
+const MESA_BLEND_R = 28;
+/** Four approach ramps, one to a quarter: there is always one near you. */
+const RAMP_COUNT = 4;
+const RAMP_OUTER_R = 32;
+const RAMP_HALF_WIDTH = 5;
 
-export const TOWN_CENTER = { x: WORLD_X / 2 + 64, z: WORLD_Z / 2 - 10 };
+/**
+ * The clearing.
+ *
+ * Out to here the ground is the field's level and nothing grows but grass. The
+ * figure is chosen against RENDER.fogDistance rather than against anything in
+ * the fiction: the treeline has to be at the range where the fog has just about
+ * closed, so that from the parapet it reads as a wall at the limit of sight and
+ * the men forming up behind it are shapes rather than targets.
+ */
+export const CLEARING_R = 108;
+/**
+ * How far the treeline wanders either side of that.
+ *
+ * A circle of trees is a stencil. The edge is driven by a noise field instead,
+ * so the jungle comes forward in tongues and falls back into bays, and the
+ * clearing has corners in it worth knowing.
+ */
+const TREELINE_WOBBLE = 17;
+/** Depth of the band over which the trees thicken from nothing to canopy. */
+const TREELINE_BAND = 20;
+/** Distance past the clearing over which the flat gives way to natural ground. */
+const FIELD_FEATHER = 36;
+
+/**
+ * The mountain rim.
+ *
+ * The old map faded into water at the edges, which made the boundary look like
+ * somewhere you could keep going. Mountains say the same thing honestly: the
+ * map ends because the ground goes up. They are also the only thing on the map
+ * visible over the canopy from inside the jungle, so they double as a compass.
+ */
+const RIM_R = 205;
+/**
+ * What the rim is levelled *to*, and how far the crests stand over that.
+ *
+ * A target rather than a lift. Adding a rise on top of the jungle floor is the
+ * obvious way to write this and it is wrong: the floor is already noise, so the
+ * sum runs past the height clamp at WORLD_Y - 14 and the whole rim comes out as
+ * one flat grey mesa at the ceiling. Levelling toward a target keeps the crests
+ * inside the world with room to spare, and keeps the passes between them low
+ * enough to read as passes.
+ */
+const RIM_TOP = 37;
+const RIM_PEAK = 12;
+
+/**
+ * Karst landmarks out in the trees.
+ *
+ * Three limestone lumps big enough to see over the canopy, placed off the road
+ * and well apart, so that a player lost in the jungle has something to take a
+ * bearing on that is not the road they have just lost. Offsets are from the
+ * middle of the map.
+ */
+const MASSIFS: readonly { dx: number; dz: number; r: number; h: number }[] = [
+  { dx: 148, dz: -104, r: 48, h: 43 },
+  { dx: -58, dz: 168, r: 42, h: 39 },
+  { dx: -164, dz: -118, r: 46, h: 41 },
+];
+/** How far the ridged crest lifts a massif's top over its own level. */
+const MASSIF_PEAK = 8;
+
+/**
+ * The village.
+ *
+ * A long way out in the bush now -- a hundred and seventy blocks, most of it
+ * jungle -- because the walk to the shop is the only part of the loop that is
+ * not a fight, and it should feel like leaving. It sits *on* the road rather
+ * than at the end of a path to it: the road becomes the street, runs through
+ * both gates of the market square, and comes out the far side still heading
+ * west, which is what makes the village somewhere the road goes through rather
+ * than somewhere it stops.
+ */
+export const TOWN_CENTER = { x: WORLD_X / 2 - 158, z: WORLD_Z / 2 + 62 };
 /**
  * Radius of the shelf on an imported map, where there is no village layout to
  * cut a rectangle for. The generated map uses {@link TOWN_HALF_X} instead.
  */
 export const TOWN_RADIUS = 17;
-const TOWN_Y = 24;
+const TOWN_Y = FIELD_Y + 2;
 
 /**
  * The village shelf.
@@ -143,8 +258,8 @@ const STREET_HALF = 2;
 /**
  * Distance outside the village shelf, 0 anywhere on it.
  *
- * Same rounded-rectangle measure the paddy uses, so the flattening, the tree
- * exclusion and the floor all agree about where the village stops.
+ * A rounded-rectangle measure, so the flattening, the tree exclusion, the
+ * paddy and the road all agree about where the village stops.
  */
 function townDistance(x: number, z: number, center = TOWN_CENTER): number {
   const ox = Math.max(0, Math.abs(x - center.x) - TOWN_HALF_X);
@@ -153,44 +268,143 @@ function townDistance(x: number, z: number, center = TOWN_CENTER): number {
 }
 
 /**
- * Rice paddies, on the flat immediately south of the firebase.
+ * The road, as a list of places it has to go through, offset from the middle
+ * of the map.
+ *
+ * Hand-authored rather than derived, because the road is the map's spine and
+ * every other decision hangs off where it runs. Reading west to east it comes
+ * down out of the mountains, straightens out through the village -- those two
+ * points share a z so the street runs along the world X axis and the village
+ * can be built square to it -- bends up through the trees, crosses the flat
+ * about thirty blocks off the foot of the firebase, passes the wreck, and goes
+ * back into the jungle heading east until the rim stops it.
+ *
+ * The spline through these is Catmull-Rom, so it passes through every one of
+ * them; the bends are where they are because ground bends, not because the
+ * road needed decorating.
+ */
+const ROAD_SPINE: readonly { x: number; z: number }[] = [
+  { x: -244, z: 118 },
+  { x: -212, z: 88 },
+  { x: -187, z: 62 },
+  { x: -129, z: 62 },
+  { x: -96, z: 52 },
+  { x: -52, z: 36 },
+  { x: -6, z: 31 },
+  { x: 44, z: 42 },
+  { x: 92, z: 68 },
+  { x: 146, z: 106 },
+  { x: 202, z: 148 },
+];
+
+/**
+ * The downed slick, and which way it was going when it went in.
+ *
+ * Out on the flat rather than buried in the jungle: it is the first landmark
+ * off the spawn, it is what the starting position is *about*, and a wreck you
+ * cannot see from the parapet is a wreck nobody walks to. The heading points in
+ * toward the middle of the map, so the lane of snapped canopy behind it runs
+ * back out through the treeline -- which is the part that says this thing
+ * arrived rather than being parked.
+ */
+const CRASH_ANCHOR = { dx: 58, dz: 66 };
+/**
+ * Which way the ship was travelling, normalised.
+ *
+ * Nearly due north, which is *not* quite the bearing back to the firebase --
+ * and the difference is the whole reason this is written down rather than
+ * derived. The scar is ploughed backwards along this, and the road happens to
+ * run past the wreck on much the same diagonal the base does, so a scar aimed
+ * at the base came out running parallel to the road a few blocks off it and
+ * read as a fork in it. Turned thirty-odd degrees, it crosses the eye instead
+ * of following it: one line of red earth is the road going somewhere, the other
+ * is a lane of snapped canopy going back into the trees, and you can tell them
+ * apart from the parapet.
+ */
+const CRASH_HEADING = { x: -0.27, z: -0.96 };
+
+/**
+ * Where the jungle camps go, offset from the middle of the map.
+ *
+ * Placed rather than scattered. A random ring around the firebase gives you
+ * five camps that are all the same distance away, all equally relevant, and
+ * none of which is anywhere in particular; these each have a job:
+ *
+ *  - two sit just inside the treeline looking out over the field, on the two
+ *    bearings a player crossing it is most likely to use. They are the reason
+ *    the open ground is dangerous even when nothing is attacking.
+ *  - two flank the road, far enough off it to be a choice rather than a toll
+ *    gate -- one between the field and the village, one out east where the
+ *    road climbs into the hills.
+ *  - one sits past the village, so the walk to the shop has something behind
+ *    it as well as in front of it.
+ *  - one is deep in the trees with nothing near it, for the player who goes
+ *    looking.
+ *
+ * These are wishes, not commands: {@link placeOutposts} searches outward from
+ * each for ground flat enough and clear enough to scrape a pad on, and drops
+ * any it cannot satisfy.
+ */
+const OUTPOST_ANCHORS: readonly { dx: number; dz: number }[] = [
+  { dx: 96, dz: -74 },
+  { dx: -118, dz: -42 },
+  { dx: -92, dz: 92 },
+  { dx: 134, dz: 56 },
+  { dx: -196, dz: 6 },
+  { dx: -40, dz: -178 },
+];
+
+/**
+ * The rice paddy, out on the flat beside the wreck.
  *
  * A paddy is a grid of flooded plots held apart by earth bunds. This one is
  * laid *flush with the ground it sits on*: one level for the whole field, taken
  * from the natural height under it, with the bunds drawn as packed earth in the
  * surface layer rather than stacked a block proud of it. Nothing about the
- * field stands above the jungle floor around it -- walk in off the margin and
- * there is no step up, and from the parapet it reads as ground that has been
- * worked rather than a plinth someone built.
+ * field stands above the ground around it -- walk in off the margin and there
+ * is no step up, and from the parapet it reads as ground that has been worked
+ * rather than a plinth someone built.
  *
- * This one sits right under the hill, close enough that it is the first thing
- * the player sees off the spawn and inside the fog distance from the parapet.
- * That proximity is the point: the field is worked ground with people on it,
- * so the approach the enemy uses is somewhere that visibly belongs to someone.
- *
- * Placement is constrained on three sides: clear of the mesa's blend skirt
- * (MESA_BLEND_R + 4) so the flattening doesn't eat the cliff, clear of the
- * river channel to the west so it doesn't dam it, and clear of the town shelf.
+ * It is beside the crash site because the two of them together are what make
+ * the far side of the clearing a *place*: the wreck is the landmark, the field
+ * is the reason anybody was out here before it arrived, and the farmers working
+ * it are the only people on the map who are not shooting at anyone. That is
+ * also why it is out at the edge of the flat rather than under the wire -- an
+ * attacker crossing the open field has one piece of cover on it and has to
+ * come a long way to reach it.
  */
-export const PADDY_CENTER = { x: WORLD_X / 2 - 4, z: WORLD_Z / 2 + 52 };
+const PADDY_ANCHOR = { dx: 22, dz: 78 };
 /** Interior span of one plot; +1 for the bund on each axis gives the pitch. */
 const PADDY_PLOT = 9;
 const PADDY_PITCH = PADDY_PLOT + 1;
-const PADDY_PLOTS_X = 5;
-const PADDY_PLOTS_Z = 4;
-const PADDY_X0 = Math.round(PADDY_CENTER.x - (PADDY_PLOTS_X * PADDY_PITCH) / 2);
-const PADDY_Z0 = Math.round(PADDY_CENTER.z - (PADDY_PLOTS_Z * PADDY_PITCH) / 2);
-const PADDY_X1 = PADDY_X0 + PADDY_PLOTS_X * PADDY_PITCH;
-const PADDY_Z1 = PADDY_Z0 + PADDY_PLOTS_Z * PADDY_PITCH;
+const PADDY_PLOTS_X = 4;
+const PADDY_PLOTS_Z = 3;
 /** Fallback level, used only before a world has been generated. */
-const PADDY_BASE_Y = 21;
+const PADDY_BASE_Y = FIELD_Y;
 
 /**
- * The y of the field's surface voxel, settled during worldgen from the natural
- * ground under the footprint rather than from a constant, so the field lies on
- * the terrain instead of on top of it.
+ * Where the field actually ended up, and what level it settled at.
+ *
+ * Mutable module state rather than constants, because the field is placed
+ * against the crash site and the crash site picks its own ground. Everything
+ * that reads the paddy -- the farmers, the concealment test, the client's rice
+ * geometry -- goes through here, and worldgen fills it in before any of them
+ * run. Both the client and the server generate from the same seed, so both
+ * arrive at the same numbers without either of them sending anything.
  */
+let paddyX0 = Math.round(BASE_CENTER.x + PADDY_ANCHOR.dx - (PADDY_PLOTS_X * PADDY_PITCH) / 2);
+let paddyZ0 = Math.round(BASE_CENTER.z + PADDY_ANCHOR.dz - (PADDY_PLOTS_Z * PADDY_PITCH) / 2);
+let paddyX1 = paddyX0 + PADDY_PLOTS_X * PADDY_PITCH;
+let paddyZ1 = paddyZ0 + PADDY_PLOTS_Z * PADDY_PITCH;
 let paddyFloorY = PADDY_BASE_Y;
+
+/** Puts the field's south-west corner at `x0, z0`. */
+function placePaddy(x0: number, z0: number): void {
+  paddyX0 = Math.round(x0);
+  paddyZ0 = Math.round(z0);
+  paddyX1 = paddyX0 + PADDY_PLOTS_X * PADDY_PITCH;
+  paddyZ1 = paddyZ0 + PADDY_PLOTS_Z * PADDY_PITCH;
+}
 
 /** Level of the field's surface layer. Flat: one level for the whole thing. */
 function paddyLevel(): number {
@@ -202,13 +416,14 @@ function paddyLevel(): number {
  *
  * Exported because the farmers working the paddy (fx/Farmers.ts) are drawn as
  * sub-voxel scenery rather than as blocks, so they need to know where the mud
- * is without re-deriving it from the world.
+ * is without re-deriving it from the world. Every field is a getter: the
+ * footprint is settled during worldgen, not at module load.
  */
 export const PADDY = {
-  x0: PADDY_X0,
-  x1: PADDY_X1,
-  z0: PADDY_Z0,
-  z1: PADDY_Z1,
+  get x0(): number { return paddyX0; },
+  get x1(): number { return paddyX1; },
+  get z0(): number { return paddyZ0; },
+  get z1(): number { return paddyZ1; },
   pitch: PADDY_PITCH,
   plotsX: PADDY_PLOTS_X,
   plotsZ: PADDY_PLOTS_Z,
@@ -255,11 +470,11 @@ const paddyPlots = new Uint8Array(PADDY_PLOTS_X * PADDY_PLOTS_Z);
  * hard against the path -- so walking the bunds never puts you in cover.
  */
 export function riceCoverAt(x: number, z: number): number {
-  if (x < PADDY_X0 || x > PADDY_X1 || z < PADDY_Z0 || z > PADDY_Z1) return 0;
-  const px = clamp(Math.floor((x - PADDY_X0) / PADDY_PITCH), 0, PADDY_PLOTS_X - 1);
-  const pz = clamp(Math.floor((z - PADDY_Z0) / PADDY_PITCH), 0, PADDY_PLOTS_Z - 1);
-  const offX = x - (PADDY_X0 + px * PADDY_PITCH);
-  const offZ = z - (PADDY_Z0 + pz * PADDY_PITCH);
+  if (x < paddyX0 || x > paddyX1 || z < paddyZ0 || z > paddyZ1) return 0;
+  const px = clamp(Math.floor((x - paddyX0) / PADDY_PITCH), 0, PADDY_PLOTS_X - 1);
+  const pz = clamp(Math.floor((z - paddyZ0) / PADDY_PITCH), 0, PADDY_PLOTS_Z - 1);
+  const offX = x - (paddyX0 + px * PADDY_PITCH);
+  const offZ = z - (paddyZ0 + pz * PADDY_PITCH);
   if (offX < 2 || offX > PADDY_PITCH - 1 || offZ < 2 || offZ > PADDY_PITCH - 1) return 0;
   const state = paddyPlots[px * PADDY_PLOTS_Z + pz];
   return state === PlotState.Grown ? 1 : state === PlotState.Young ? 0.55 : 0;
@@ -280,9 +495,9 @@ export function riceConceals(x: number, z: number, eyeY: number): boolean {
 
 /** True if `x, z` is inside a flooded plot (not on a bund, not off the field). */
 export function inPaddyMud(x: number, z: number): boolean {
-  if (x < PADDY_X0 + 1 || x > PADDY_X1 - 1 || z < PADDY_Z0 + 1 || z > PADDY_Z1 - 1) return false;
-  const offX = ((x - PADDY_X0) % PADDY_PITCH + PADDY_PITCH) % PADDY_PITCH;
-  const offZ = ((z - PADDY_Z0) % PADDY_PITCH + PADDY_PITCH) % PADDY_PITCH;
+  if (x < paddyX0 + 1 || x > paddyX1 - 1 || z < paddyZ0 + 1 || z > paddyZ1 - 1) return false;
+  const offX = ((x - paddyX0) % PADDY_PITCH + PADDY_PITCH) % PADDY_PITCH;
+  const offZ = ((z - paddyZ0) % PADDY_PITCH + PADDY_PITCH) % PADDY_PITCH;
   return offX >= 1 && offX <= PADDY_PITCH - 1 && offZ >= 1 && offZ <= PADDY_PITCH - 1;
 }
 
@@ -363,64 +578,151 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
   const heights = new Int16Array(WORLD_X * WORLD_Z);
   const rockiness = new Float32Array(WORLD_X * WORLD_Z);
   const moisture = new Float32Array(WORLD_X * WORLD_Z);
+  /**
+   * How much of the flat a column is: 1 out on the open field, 0 once the
+   * jungle has closed over it, and a ramp between the two through the
+   * treeline. Computed once with the heightmap and read by everything
+   * downstream that needs to know which side of the treeline it is on --
+   * the ground colour, the planting, and the wave spawn ring.
+   */
+  const field = new Float32Array(WORLD_X * WORLD_Z);
   const rng = makeRng(seed * 7919 + 13);
 
   const rampAngles: number[] = [];
-  for (let i = 0; i < RAMP_COUNT; i++) rampAngles.push((i / RAMP_COUNT) * Math.PI * 2 + 0.6);
+  for (let i = 0; i < RAMP_COUNT; i++) rampAngles.push((i / RAMP_COUNT) * Math.PI * 2 + 0.75);
 
-  // --- river path: a gentle S sweeping across the lowlands -------------------
-  const riverAt = (z: number): number =>
-    WORLD_X * 0.22
-    + Math.sin(z / 58) * 26
-    + Math.sin(z / 23 + 1.7) * 9;
+  // Settle the paddy's footprint before anything else looks at it: the
+  // heightmap levels the ground under it, the planting keeps off it, and both
+  // of those happen well before the field itself is built.
+  placePaddy(
+    BASE_CENTER.x + PADDY_ANCHOR.dx - (PADDY_PLOTS_X * PADDY_PITCH) / 2,
+    BASE_CENTER.z + PADDY_ANCHOR.dz - (PADDY_PLOTS_Z * PADDY_PITCH) / 2,
+  );
+
+  // --- river path: a gentle S across the northern jungle ---------------------
+  //
+  // Kept well out of the clearing, because a river through the field would be
+  // the one piece of broken ground on the ground whose whole job is to be
+  // unbroken -- and kept off the southern half entirely, because the road and
+  // the village are both down there and a river through either of them means a
+  // bridge nobody asked for.
+  const riverZ = (x: number): number =>
+    BASE_CENTER.z - 168
+    + Math.sin(x / 96) * 34
+    + Math.sin(x / 37 + 1.7) * 11;
+  /** How far a column is from the middle of the channel. */
+  const riverDist = (x: number, z: number): number => Math.abs(z - riverZ(x));
+
+  /**
+   * Distance from the middle of the map, and how far into the jungle a column
+   * is: 0 anywhere on the flat, 1 once the canopy has closed.
+   *
+   * The edge is a noise field rather than a radius, so the treeline comes
+   * forward in tongues and falls back into bays. Everything that has an opinion
+   * about the clearing -- the flattening, the planting, the grass, where the
+   * waves form up -- reads it from here, so they all agree on where the trees
+   * start.
+   */
+  const treelineAt = (x: number, z: number): number => {
+    // Two scales: a slow one that pulls whole bays in and out over sixty or
+    // seventy blocks of arc, and a fast one that roughens the edge of them.
+    // One octave alone gives either a wavy circle or a fuzzy circle, and both
+    // still read as a circle.
+    const bay = fbm(x / 132, z / 132, seed + 881, 2) - 0.5;
+    const ragged = fbm(x / 31, z / 31, seed + 1607, 3) - 0.5;
+    return CLEARING_R + (bay * 1.5 + ragged * 0.6) * 2 * TREELINE_WOBBLE;
+  };
 
   // -------------------------------------------------------------------------
   // 1. Heightmap
+  //
+  // Built in one pass, outward: rolling jungle floor, the mountain rim over
+  // the top of it, the karst landmarks, the river cut through the lot, and
+  // then the flat pressed down over the middle of everything.
   // -------------------------------------------------------------------------
   for (let z = 0; z < WORLD_Z; z++) {
     for (let x = 0; x < WORLD_X; x++) {
       const i = z * WORLD_X + x;
+      const dx = x - BASE_CENTER.x;
+      const dz = z - BASE_CENTER.z;
+      const d = Math.hypot(dx, dz);
 
       // Domain warp: pushes the noise around so ridges meander instead of
       // looking like obvious lumpy fBm.
       const wx = fbm(x / 140, z / 140, seed + 501, 3) - 0.5;
       const wz = fbm(x / 140, z / 140, seed + 977, 3) - 0.5;
-      const nx = (x + wx * 60) / 96;
-      const nz = (z + wz * 60) / 96;
+      const nx = (x + wx * 60) / 110;
+      const nz = (z + wz * 60) / 110;
 
       const base = fbm(nx, nz, seed, 5);
-
-      // Highland mask puts the rocky ridges on one side of the map.
-      const region = fbm(x / 190, z / 190, seed + 313, 3);
-      const highland = clamp((region - 0.46) * 3.4, 0, 1);
       const crest = ridged(nx * 1.7, nz * 1.7, seed + 61, 4);
 
-      let height = 12 + base * 22 + highland * crest * 30;
+      // The jungle floor: gently rolling, and low enough that the rim and the
+      // karst both read as things standing up out of it.
+      let height = FIELD_Y - 6 + base * 15;
+      let rock = 0;
 
-      // Coastal falloff so the map reads as an island.
-      const ex = Math.min(x, WORLD_X - 1 - x) / (WORLD_X * 0.5);
-      const ez = Math.min(z, WORLD_Z - 1 - z) / (WORLD_Z * 0.5);
-      const edge = clamp(Math.min(ex, ez) * 3.0, 0, 1);
-      height = (WATER_LEVEL - 7) + (height - (WATER_LEVEL - 7)) * smooth(edge);
+      // The rim. Rises out of the jungle over the last fifty blocks of map and
+      // keeps going to the edge, so the boundary is a mountainside rather than
+      // a line where the ground stops.
+      const rim = smooth(clamp((d - RIM_R) / 46, 0, 1));
+      if (rim > 0) {
+        height = lerp(height, RIM_TOP + crest * RIM_PEAK, rim);
+        // Bare rock starts well up the slope, not at its foot. The jungle runs
+        // some way up a mountain before it gives out, and a rim that turns grey
+        // the moment the ground tips reads as a wall somebody built rather than
+        // as country the map happens to stop in.
+        const bare = smooth(clamp((d - RIM_R - 22) / 44, 0, 1));
+        rock = Math.max(rock, bare * (0.4 + crest * 0.6));
+      }
+
+      // The karst landmarks. Steep-sided lumps with a ridged top, which is what
+      // limestone does; the square of the falloff is what keeps the sides steep
+      // rather than letting them slump into hills.
+      for (const m of MASSIFS) {
+        const md = Math.hypot(x - (BASE_CENTER.x + m.dx), z - (BASE_CENTER.z + m.dz));
+        if (md >= m.r) continue;
+        // Levelled toward a top, the way the rim is, rather than lifted off the
+        // floor: the floor is noise, and adding to it gives lumps whose height
+        // depends on where they happen to have landed. `t * t` is what keeps
+        // the sides steep -- limestone does not slump into a hill.
+        const t = smooth(1 - md / m.r);
+        height = lerp(height, m.h + crest * MASSIF_PEAK, t * t);
+        rock = Math.max(rock, t * t * (0.5 + crest * 0.5));
+      }
 
       // River carving.
-      const rx = riverAt(z);
-      const riverDist = Math.abs(x - rx);
+      const rd = riverDist(x, z);
       const riverW = 7 + fbm(x / 40, z / 40, seed + 733, 2) * 5;
-      if (riverDist < riverW + 9) {
-        const cut = 1 - smooth(clamp((riverDist - riverW) / 9, 0, 1));
+      if (rd < riverW + 11) {
+        const cut = 1 - smooth(clamp((rd - riverW) / 11, 0, 1));
         const bed = WATER_LEVEL - 3.5;
         height = lerp(height, Math.min(height, bed), cut);
       }
 
-      rockiness[i] = highland * crest;
+      // The flat. Level out to the treeline, then feathered into whatever the
+      // jungle floor was doing. The swell is a block either way -- enough that
+      // the field drains and reads as ground, little enough that nothing on it
+      // is dead ground to anybody on the parapet.
+      const edge = treelineAt(x, z);
+      const flat = plateauBlend(d, edge, FIELD_FEATHER);
+      // The trees close over a shorter distance than the ground takes to
+      // recover its own shape, so the two are not the same ramp.
+      field[i] = 1 - clamp((d - edge) / TREELINE_BAND, 0, 1);
+      if (flat > 0) {
+        const swell = (fbm(x / 41, z / 41, seed + 404, 2) - 0.5) * 2.4;
+        height = lerp(height, FIELD_Y + swell, flat);
+        rock *= 1 - flat;
+      }
+
+      rockiness[i] = rock;
       moisture[i] = fbm(x / 70, z / 70, seed + 211, 3);
       heights[i] = Math.round(height);
     }
   }
 
   // -------------------------------------------------------------------------
-  // 2. Carve the fort mesa and its ramps
+  // 2. Carve the firebase knoll and its ramps
   // -------------------------------------------------------------------------
   for (let z = 0; z < WORLD_Z; z++) {
     for (let x = 0; x < WORLD_X; x++) {
@@ -436,12 +738,14 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
       if (d <= MESA_TOP_R) {
         h = BASE_PLATEAU_Y;
       } else if (d <= MESA_CLIFF_R) {
-        // Near-vertical drop: unclimbable, so the ramps matter.
+        // The cut bank: steep enough that walking up it is not on and an
+        // attacker has to ramp it, shallow enough that stepping off the edge
+        // costs a defender a stumble rather than a walk round the perimeter.
         const t = (d - MESA_TOP_R) / (MESA_CLIFF_R - MESA_TOP_R);
-        h = lerp(BASE_PLATEAU_Y, BASE_PLATEAU_Y - 9, smooth(t));
+        h = lerp(BASE_PLATEAU_Y, FIELD_Y, smooth(t));
       } else {
         const t = clamp((d - MESA_CLIFF_R) / (MESA_BLEND_R - MESA_CLIFF_R), 0, 1);
-        h = lerp(BASE_PLATEAU_Y - 9, natural, smooth(t));
+        h = lerp(FIELD_Y, natural, smooth(t));
       }
 
       // Ramps override the cliff with a walkable grade.
@@ -488,9 +792,9 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
   {
     let sum = 0;
     let n = 0;
-    for (let z = PADDY_Z0; z <= PADDY_Z1; z++) {
+    for (let z = paddyZ0; z <= paddyZ1; z++) {
       if (z < 0 || z >= WORLD_Z) continue;
-      for (let x = PADDY_X0; x <= PADDY_X1; x++) {
+      for (let x = paddyX0; x <= paddyX1; x++) {
         if (x < 0 || x >= WORLD_X) continue;
         sum += heights[z * WORLD_X + x];
         n++;
@@ -500,14 +804,14 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
   }
 
   const paddyY = paddyLevel();
-  for (let z = PADDY_Z0 - 8; z <= PADDY_Z1 + 8; z++) {
+  for (let z = paddyZ0 - 8; z <= paddyZ1 + 8; z++) {
     if (z < 0 || z >= WORLD_Z) continue;
-    for (let x = PADDY_X0 - 8; x <= PADDY_X1 + 8; x++) {
+    for (let x = paddyX0 - 8; x <= paddyX1 + 8; x++) {
       if (x < 0 || x >= WORLD_X) continue;
       // How far outside the field rectangle this column is, feathered so the
       // surrounding jungle floor eases into the field instead of stepping.
-      const ox = Math.max(0, Math.max(PADDY_X0 - x, x - PADDY_X1));
-      const oz = Math.max(0, Math.max(PADDY_Z0 - z, z - PADDY_Z1));
+      const ox = Math.max(0, Math.max(paddyX0 - x, x - paddyX1));
+      const oz = Math.max(0, Math.max(paddyZ0 - z, z - paddyZ1));
       const b = plateauBlend(Math.hypot(ox, oz), 0, 8);
       if (b <= 0) continue;
       const i = z * WORLD_X + x;
@@ -543,6 +847,11 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
       const speck = hash2(x, z, seed + 555);
       const wet = moisture[i];
       const rock = rockiness[i];
+      const open = field[i];
+      // Where the grass on the flat is thin. Patches a few blocks across, not
+      // per-voxel confetti: bare ground comes in scuffs and worn lines, and
+      // noise sampled a block at a time gives a checkerboard instead.
+      const wear = fbm(x / 13, z / 13, seed + 1231, 2);
 
       for (let y = 0; y <= h; y++) {
         let color: number;
@@ -572,6 +881,32 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
             material = Mat.Dirt;
           } else if (h <= WATER_LEVEL + 3 && slope < 2) {
             color = speck > 0.6 ? COL_SAND_DARK : COL_MUD;
+            material = Mat.Dirt;
+          } else if (open > 0.5 && slope < 2) {
+            // The flat.
+            //
+            // This is the only large piece of ground on the map that is one
+            // thing all the way across, and it has to survive being looked at
+            // from the parapet for the whole game. So it is grass in three
+            // shades laid down in patches -- lush where the ground lies wet,
+            // burnt off where it lies high -- with scuffs of the red earth
+            // underneath showing through where it has been walked on. What it
+            // must not be is a single colour: a hundred-block field in one
+            // green reads as a billiard table, and no amount of scenery on top
+            // of it fixes that.
+            const lush = wear * 0.65 + wet * 0.35;
+            if (lush < 0.30) {
+              // Burnt off, not bare. Only the odd scuff goes all the way down
+              // to the red earth: a field with laterite showing through
+              // wherever it is dry is a field with a rash.
+              color = speck > 0.82 ? COL_LATERITE : COL_GRASS_DRY;
+            } else if (lush < 0.44) {
+              color = speck > 0.5 ? COL_GRASS_DRY : COL_GRASS;
+            } else if (lush > 0.63) {
+              color = speck > 0.55 ? COL_MOSS : COL_JUNGLE;
+            } else {
+              color = speck > 0.66 ? COL_JUNGLE_LIGHT : (speck > 0.3 ? COL_GRASS : COL_JUNGLE);
+            }
             material = Mat.Dirt;
           } else if (slope >= 3) {
             // Bare karst. The grey limestone crags are as much a part of the
@@ -655,15 +990,17 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
   };
 
   // The road is laid out before anything is planted, so the jungle can be told
-  // to leave it alone: a road you have to clear a tree out of the middle of was
-  // never a road, and cutting one through afterwards leaves sawn-off canopies
-  // hanging over the gap.
-  const road = planRoad(BASE_CENTER, TOWN_CENTER, rampAngles);
+  // to leave it alone.
+  const spineWorld = ROAD_SPINE.map((p) => ({
+    x: BASE_CENTER.x + p.x,
+    z: BASE_CENTER.z + p.z,
+  }));
+  const road = planRoad(BASE_CENTER, rampAngles, spineWorld);
   const onRoad = (x: number, z: number): boolean =>
-    road[z * WORLD_X + x] !== RoadCell.None;
+    road.mask[z * WORLD_X + x] !== RoadCell.None;
 
-  scatterScenery(world, heights, rockiness, moisture, rng, {
-    nearBase, nearTown, onRamp, onRoad, heightAt, riverAt,
+  scatterScenery(world, heights, rockiness, moisture, field, rng, {
+    nearBase, nearTown, onRamp, onRoad, heightAt, riverDist,
   });
 
   // -------------------------------------------------------------------------
@@ -672,30 +1009,58 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
   buildStarterFort(world, layout);
   buildTown(world, layout, rng);
   // After the fort and the village, so the track runs over the scraped hilltop
-  // and stops at the gate rather than being buried by either of them.
-  paintRoad(world, heights, road, TOWN_CENTER);
-  buildRicePaddies(world, layout, heights, rng);
-  // The wreck goes in before the camps, because it is the only structure on the
-  // map that gets to pick its own ground twice over -- it needs somewhere flat
-  // *and* somewhere with a clear run of trees behind it to have come through --
-  // and the camps can be placed around whatever it takes. Same reason it is
-  // after the road and the village: it has to be able to keep off both.
+  // and through the village street rather than being buried by either of them.
+  paintRoad(world, heights, road.mask, TOWN_CENTER);
+
+  // The paddy is laid against the wreck, so the wreck settles first. It is
+  // placed at an anchor out on the flat rather than searched for across the
+  // map: where it lies is a layout decision, not a terrain one, and the search
+  // is only there to find the flattest few blocks near the spot.
+  const crashAnchor = {
+    x: BASE_CENTER.x + CRASH_ANCHOR.dx,
+    z: BASE_CENTER.z + CRASH_ANCHOR.dz,
+  };
   layout.crashSite = placeCrashSite(world, rng, {
-    town: TOWN_CENTER,
+    anchor: crashAnchor,
+    // Nose in toward the middle of the map, so the lane of broken canopy runs
+    // back out through the treeline behind it.
+    headingX: CRASH_HEADING.x,
+    headingZ: CRASH_HEADING.z,
+    // The foot-track off the wreck runs back to the road, which is what makes
+    // it somewhere people have already been rather than somewhere nobody has
+    // found yet.
+    trackTo: nearestOn(road.spine, crashAnchor.x, crashAnchor.z),
     heights,
     onRoad,
     occupied: (x, z) => townDistance(x, z) < 10 || inPaddyMud(x, z),
   });
 
+  const crash = layout.crashSite;
+  buildRicePaddies(world, layout, heights, rng);
+
   // The jungle camps go in before the tunnels and after everything else: they
   // scrape their own pads out of whatever the scenery left there, and they need
   // the road to already exist so they can be placed off it.
-  const crash = layout.crashSite;
   layout.outposts = placeOutposts(world, rng, {
     base: BASE_CENTER,
+    anchors: OUTPOST_ANCHORS.map((a) => ({
+      x: BASE_CENTER.x + a.dx,
+      z: BASE_CENTER.z + a.dz,
+    })),
     heights,
     onRoad,
-    occupied: (x, z) => townDistance(x, z) < 12
+    occupied: (x, z) =>
+      // Not on the open field. This one is doing more work than it looks: the
+      // search wants the flattest ground it can find near its anchor, and the
+      // flattest ground on this map by a mile is the clearing -- so without
+      // this every camp slides downhill out of the trees and pitches itself in
+      // the middle of the grass under the firebase's guns. A camp is an ambush,
+      // and an ambush is in cover.
+      field[z * WORLD_X + x] > 0.55
+      // Well clear of the village: a camp pitched within sight of the huts
+      // turns the walk to the shop into a firefight every single time, and the
+      // village is the one place on the map that is not one.
+      || townDistance(x, z) < 26
       || inPaddyMud(x, z)
       // The scar runs a long way back up the approach; a camp pitched in the
       // middle of it would be a camp pitched in a ploughed field.
@@ -707,16 +1072,34 @@ export function generateWorld(world: VoxelWorld, seed = 1337): MapLayout {
 
   // Last, so the tunnels are cut under everything that stands on the ground
   // rather than being backfilled by it.
-  digTunnelNetwork(world, layout, heights, rng);
+  digTunnelNetwork(world, layout, heights, rng, field);
 
   // -------------------------------------------------------------------------
-  // 8. Perimeter spawns, biased toward the ramp approaches
+  // 8. Where the waves form up
+  //
+  // On the treeline, not on a circle around the hill. The whole shape of a
+  // fight on this map is men coming out of the trees onto open grass, and a
+  // spawn ring at a fixed radius would put half of them out on the field with
+  // nothing behind them and the other half fifty blocks back in the jungle.
+  // Walking each bearing outward until the canopy closes puts every one of
+  // them in the same relationship to the clearing.
   // -------------------------------------------------------------------------
-  const spawnRadius = 100;
-  for (let i = 0; i < 9; i++) {
-    const a = (i / 9) * Math.PI * 2;
-    const sx = clamp(Math.round(BASE_CENTER.x + Math.cos(a) * spawnRadius), 6, WORLD_X - 7);
-    const sz = clamp(Math.round(BASE_CENTER.z + Math.sin(a) * spawnRadius), 6, WORLD_Z - 7);
+  const SPAWNS = 12;
+  for (let i = 0; i < SPAWNS; i++) {
+    const a = (i / SPAWNS) * Math.PI * 2 + 0.3;
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    let r = CLEARING_R - TREELINE_WOBBLE;
+    for (; r < CLEARING_R + TREELINE_WOBBLE + TREELINE_BAND; r += 2) {
+      const px = Math.round(BASE_CENTER.x + cos * r);
+      const pz = Math.round(BASE_CENTER.z + sin * r);
+      if (px < 6 || pz < 6 || px >= WORLD_X - 6 || pz >= WORLD_Z - 6) break;
+      // Just inside the canopy: far enough in to be hidden, near enough that
+      // the first step out of it is onto the field.
+      if (field[pz * WORLD_X + px] < 0.35) break;
+    }
+    const sx = clamp(Math.round(BASE_CENTER.x + cos * (r + 4)), 6, WORLD_X - 7);
+    const sz = clamp(Math.round(BASE_CENTER.z + sin * (r + 4)), 6, WORLD_Z - 7);
     layout.spawnPoints.push({
       x: sx + 0.5,
       y: Math.max(WATER_LEVEL + 1, heightAt(sx, sz) + 1),
@@ -736,7 +1119,8 @@ interface ScatterCtx {
   onRamp: (x: number, z: number) => boolean;
   onRoad: (x: number, z: number) => boolean;
   heightAt: (x: number, z: number) => number;
-  riverAt: (z: number) => number;
+  /** Distance from the middle of the river channel. */
+  riverDist: (x: number, z: number) => number;
 }
 
 function scatterScenery(
@@ -744,6 +1128,7 @@ function scatterScenery(
   heights: Int16Array,
   rockiness: Float32Array,
   moisture: Float32Array,
+  field: Float32Array,
   rng: () => number,
   ctx: ScatterCtx,
 ): void {
@@ -774,7 +1159,7 @@ function scatterScenery(
       if (townD < 3) continue;
       if (townD < 12 && rng() * 8 > townD - 3) continue;
       // Paddies are worked ground; nothing self-seeds in them.
-      if (x >= PADDY_X0 - 3 && x <= PADDY_X1 + 3 && z >= PADDY_Z0 - 3 && z <= PADDY_Z1 + 3) continue;
+      if (x >= paddyX0 - 3 && x <= paddyX1 + 3 && z >= paddyZ0 - 3 && z <= paddyZ1 + 3) continue;
 
       const slope = Math.max(
         Math.abs(h - ctx.heightAt(x + 1, z)),
@@ -785,7 +1170,59 @@ function scatterScenery(
 
       const rock = rockiness[i];
       const wet = moisture[i];
+      const open = field[i];
       const roll = rng();
+
+      // The flat, and the treeline.
+      //
+      // This is the rule that shapes the map more than any other. Out on the
+      // open field nothing grows above knee height at all -- the grass there is
+      // scenery drawn client-side (fx/Grass.ts), not blocks -- because the
+      // whole point of the clearing is that there is nowhere on it to hide.
+      // Through the band where `open` falls from 1 to 0 the canopy comes in
+      // fast but not instantly, which is what makes the edge of the jungle a
+      // place with depth to it rather than a wall with a line painted at its
+      // foot.
+      //
+      // The handful of things that do stand on the field are deliberate: a
+      // lone tree or a scrap of brush every few hundred blocks, far enough
+      // apart that each one is a landmark and a piece of cover somebody has to
+      // choose to run to.
+      if (open > 0.02) {
+        if (open > 0.88) {
+          // Out on the grass. What stands here is not a thinner version of the
+          // jungle -- it is the handful of things that survived being in the
+          // open, and they are placed as a copse field rather than a sprinkle:
+          // `stand` is a slow noise that decides which parts of the clearing
+          // have anything on them at all, so trees come in twos and threes with
+          // long empty stretches between them. That is what makes a lone tree a
+          // landmark and a clump of three a piece of cover worth running to,
+          // instead of making the whole field evenly speckled.
+          const stand = fbm(x / 47, z / 47, 6521, 2);
+          const chance = 0.012 + clamp((stand - 0.44) / 0.3, 0, 1) * 0.085;
+          if (roll < chance) {
+            const pick = rng();
+            if (pick < 0.52) plantBroadleaf(world, x, h, z, rng);
+            else if (pick < 0.68) plantPalm(world, x, h, z, rng);
+            else if (pick < 0.80) plantBamboo(world, x, h, z, rng);
+            else plantBush(world, x, h, z, rng, 2.2);
+          } else if (roll < chance + 0.02) {
+            plantBush(world, x, h, z, rng, rng() < 0.5 ? 2.2 : 1);
+          } else if (roll > 0.996) {
+            placeBoulder(world, x, h, z, rng);
+          }
+          continue;
+        }
+        // In the band, `open` is the chance this cell stays clear -- so the
+        // gaps between the trees close as the field runs out. Drawn fresh
+        // rather than reusing `roll`, which the canopy test below also uses:
+        // sharing one number would correlate "not cleared" with "too high to
+        // be a tree" and leave the whole band bald.
+        if (rng() < open) {
+          if (rng() < 0.12) plantBush(world, x, h, z, rng, rng() < 0.5 ? 2.2 : 1);
+          continue;
+        }
+      }
 
       // Boulders like steep, rocky ground.
       if (rock > 0.45 || slope >= 3) {
@@ -796,9 +1233,9 @@ function scatterScenery(
       if (slope > 2) continue;
 
       const beach = h <= WATER_LEVEL + 3;
-      const riverDist = Math.abs(x - ctx.riverAt(z));
+      const bank = ctx.riverDist(x, z);
 
-      if (beach || riverDist < 14) {
+      if (beach || bank < 14) {
         // Riverbank: coconut palms over banana and scrub.
         if (roll < 0.18) plantPalm(world, x, h, z, rng);
         else if (roll < 0.32) plantBanana(world, x, h, z, rng);
@@ -1374,9 +1811,9 @@ function buildRicePaddies(
   const level = paddyLevel();
 
   for (let px = 0; px < PADDY_PLOTS_X; px++) {
-    const x0 = PADDY_X0 + px * PADDY_PITCH;
+    const x0 = paddyX0 + px * PADDY_PITCH;
     for (let pz = 0; pz < PADDY_PLOTS_Z; pz++) {
-      const z0 = PADDY_Z0 + pz * PADDY_PITCH;
+      const z0 = paddyZ0 + pz * PADDY_PITCH;
       const x1 = x0 + PADDY_PITCH;
       const z1 = z0 + PADDY_PITCH;
 
@@ -1427,20 +1864,22 @@ function buildRicePaddies(
     }
   }
 
-  // A hamlet on the natural ground off the eastern end, looking back across
-  // the field, with the flag up. Placed off the heightmap rather than off the
-  // field level, because the flattening feathers out here and the field level
-  // would leave the houses standing over nothing.
+  // A hamlet on the natural ground off the inboard end, looking back across the
+  // field toward the hill, with the flag up. Inboard rather than outboard
+  // because the wreck is on the other side and two huts pitched in the middle
+  // of a crash site is not a hamlet, it is a collision. Placed off the
+  // heightmap rather than off the field level, because the flattening feathers
+  // out here and the field level would leave the houses standing over nothing.
   const groundAt = (x: number, z: number): number =>
     (x < 0 || z < 0 || x >= WORLD_X || z >= WORLD_Z) ? PADDY_BASE_Y : heights[z * WORLD_X + x];
 
-  const hx = PADDY_X1 + 6;
-  const hz1 = PADDY_Z0 + 8;
-  const hz2 = PADDY_Z1 - 8;
+  const hx = paddyX0 - 8;
+  const hz1 = paddyZ0 + 8;
+  const hz2 = paddyZ1 - 8;
   buildStiltHouse(world, hx, groundAt(hx, hz1), hz1);
-  buildStiltHouse(world, hx + 4, groundAt(hx + 4, hz2), hz2);
+  buildStiltHouse(world, hx - 4, groundAt(hx - 4, hz2), hz2);
   const fz = Math.round((hz1 + hz2) / 2);
-  addFlagSite(layout, hx - 1, groundAt(hx - 1, fz) + 1, fz, -1, 0);
+  addFlagSite(layout, hx + 1, groundAt(hx + 1, fz) + 1, fz, 1, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1494,61 +1933,20 @@ function splineAt(pts: { x: number; z: number }[], i: number, t: number): { x: n
 }
 
 /**
- * Works out where the road runs and stamps it into a mask, before anything is
- * planted or built. Nothing is written to the world here.
+ * Stamps a run of road into a mask, along a Catmull-Rom spline through `pts`.
+ *
+ * Nothing is written to the world here -- the mask is planned before anything
+ * is planted so the jungle can be told to leave the road alone. A road you have
+ * to clear a tree out of the middle of was never a road, and cutting one
+ * through afterwards leaves sawn-off canopies hanging over the gap.
  */
-function planRoad(
-  base: { x: number; z: number },
-  town: { x: number; z: number },
-  rampAngles: number[],
-): Uint8Array {
-  const mask = new Uint8Array(WORLD_X * WORLD_Z);
-
-  // Leave by whichever ramp points nearest the village. The cliff band is
-  // deliberately unclimbable, so this is the only honest way off the hill.
-  const bearing = Math.atan2(town.z - base.z, town.x - base.x);
-  let ramp = rampAngles[0];
-  let bestTurn = Infinity;
-  for (const ra of rampAngles) {
-    let d = (ra - bearing) % (Math.PI * 2);
-    if (d > Math.PI) d -= Math.PI * 2;
-    if (d < -Math.PI) d += Math.PI * 2;
-    if (Math.abs(d) < bestTurn) {
-      bestTurn = Math.abs(d);
-      ramp = ra;
-    }
-  }
-  const dirX = Math.cos(ramp);
-  const dirZ = Math.sin(ramp);
-
-  const pts: { x: number; z: number }[] = [
-    // On the scraped hilltop, short of the Core.
-    { x: base.x + dirX * (MESA_TOP_R - 6), z: base.z + dirZ * (MESA_TOP_R - 6) },
-    // Down the ramp and out of its mouth, still running the ramp's line: a
-    // road that starts turning before it is off the grade reads as a shortcut.
-    { x: base.x + dirX * RAMP_OUTER_R, z: base.z + dirZ * RAMP_OUTER_R },
-    { x: base.x + dirX * (RAMP_OUTER_R + 8), z: base.z + dirZ * (RAMP_OUTER_R + 8) },
-  ];
-  const gate = { x: town.x - TOWN_HALF_X - 4, z: town.z };
-  // One long sweep around the foot of the hill, bulging away from the cliff so
-  // the road holds its distance from the skirt instead of hugging it.
-  const midX = (pts[2].x + gate.x) / 2;
-  const midZ = (pts[2].z + gate.z) / 2;
-  const away = Math.hypot(midX - base.x, midZ - base.z) || 1;
-  pts.push({
-    x: midX + ((midX - base.x) / away) * 5,
-    z: midZ + ((midZ - base.z) / away) * 5,
-  });
-  pts.push(gate);
-  // Past the gate, so the mask keeps the trees off the village approach.
-  pts.push({ x: town.x - TOWN_HALF_X + 1, z: town.z });
-
+function stampRoad(mask: Uint8Array, pts: { x: number; z: number }[], half: number, verge: number): void {
   const stamp = (cx: number, cz: number, tx: number, tz: number): void => {
     // Perpendicular to the heading, for the ruts.
     const tl = Math.hypot(tx, tz) || 1;
     const nx = -tz / tl;
     const nz = tx / tl;
-    const r = Math.ceil(ROAD_VERGE) + 1;
+    const r = Math.ceil(verge) + 1;
     const x0 = Math.round(cx);
     const z0 = Math.round(cz);
     for (let dz = -r; dz <= r; dz++) {
@@ -1559,10 +1957,10 @@ function planRoad(
         const ox = x + 0.5 - cx;
         const oz = z + 0.5 - cz;
         const d = Math.hypot(ox, oz);
-        if (d > ROAD_VERGE) continue;
+        if (d > verge) continue;
         const lateral = Math.abs(ox * nx + oz * nz);
         let cell: RoadCell;
-        if (d > ROAD_HALF) cell = RoadCell.Verge;
+        if (d > half) cell = RoadCell.Verge;
         else if (lateral >= RUT_INNER && lateral <= RUT_OUTER) cell = RoadCell.Rut;
         else cell = RoadCell.Track;
         const i = z * WORLD_X + x;
@@ -1571,10 +1969,13 @@ function planRoad(
     }
   };
 
-  const SEG_STEPS = 24;
+  // One step per block or so along the spline, which at these radii is enough
+  // that consecutive stamps overlap and the run comes out continuous.
   for (let i = 0; i < pts.length - 1; i++) {
-    for (let s = 0; s <= SEG_STEPS; s++) {
-      const t = s / SEG_STEPS;
+    const span = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z);
+    const steps = Math.max(8, Math.ceil(span));
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
       const c = splineAt(pts, i, t);
       const ahead = splineAt(pts, i, Math.min(1, t + 0.02));
       let tx = ahead.x - c.x;
@@ -1587,7 +1988,85 @@ function planRoad(
       stamp(c.x + (-tz / tl) * wander, c.z + (tx / tl) * wander, tx, tz);
     }
   }
-  return mask;
+}
+
+/** Nearest point on a polyline to `p`, and how far along it that is. */
+function nearestOn(pts: readonly { x: number; z: number }[], px: number, pz: number): { x: number; z: number } {
+  let best = pts[0];
+  let bestD = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const ax = pts[i].x, az = pts[i].z;
+    const bx = pts[i + 1].x, bz = pts[i + 1].z;
+    const vx = bx - ax, vz = bz - az;
+    const len2 = vx * vx + vz * vz || 1;
+    const t = clamp(((px - ax) * vx + (pz - az) * vz) / len2, 0, 1);
+    const cx = ax + vx * t, cz = az + vz * t;
+    const d = (cx - px) * (cx - px) + (cz - pz) * (cz - pz);
+    if (d < bestD) { bestD = d; best = { x: cx, z: cz }; }
+  }
+  return best;
+}
+
+/**
+ * The map's road, and the spur off it up onto the firebase.
+ *
+ * The spine is authored ({@link ROAD_SPINE}) rather than routed, because it is
+ * the one line on the map that has to be legible from anywhere it is visible:
+ * it comes out of the mountains in the east, crosses the flat past the foot of
+ * the hill, and runs west through the trees into the village and out the far
+ * side. Follow it either way for long enough and you arrive somewhere.
+ *
+ * The spur is what connects the player to it. It leaves the compound by
+ * whichever ramp points nearest the road, runs down the grade on the ramp's own
+ * line -- a track that starts turning before it is off the slope reads as a
+ * shortcut, not a road -- and joins the spine at the nearest point on it.
+ *
+ * The surface is colour only: one voxel of packed earth swapped in at ground
+ * level, plus a grade pass that shaves the humps out from under it. Nothing is
+ * raised, so the road climbs and dips with whatever it crosses, and digging it
+ * up leaves a hole like any other dirt.
+ */
+function planRoad(
+  base: { x: number; z: number },
+  rampAngles: number[],
+  spine: readonly { x: number; z: number }[],
+): { mask: Uint8Array; spine: { x: number; z: number }[] } {
+  const mask = new Uint8Array(WORLD_X * WORLD_Z);
+  const pts = spine.map((p) => ({ x: p.x, z: p.z }));
+  stampRoad(mask, pts, ROAD_HALF, ROAD_VERGE);
+
+  // Which ramp faces the road. Measured against the nearest point on the spine
+  // rather than against the village, because the village is a long way west and
+  // the road passes the hill on the south.
+  const join = nearestOn(pts, base.x, base.z);
+  const bearing = Math.atan2(join.z - base.z, join.x - base.x);
+  let ramp = rampAngles[0];
+  let bestTurn = Infinity;
+  for (const ra of rampAngles) {
+    let d = (ra - bearing) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    if (Math.abs(d) < bestTurn) { bestTurn = Math.abs(d); ramp = ra; }
+  }
+  const dirX = Math.cos(ramp);
+  const dirZ = Math.sin(ramp);
+
+  const spur = [
+    // On the scraped hilltop, short of the radio.
+    { x: base.x + dirX * (MESA_TOP_R - 6), z: base.z + dirZ * (MESA_TOP_R - 6) },
+    // Down the ramp and out of its mouth, still running the ramp's line.
+    { x: base.x + dirX * RAMP_OUTER_R, z: base.z + dirZ * RAMP_OUTER_R },
+    { x: base.x + dirX * (RAMP_OUTER_R + 9), z: base.z + dirZ * (RAMP_OUTER_R + 9) },
+    join,
+    // A little past the junction, so the mask keeps the verge continuous
+    // through it instead of leaving a notch where the two runs meet.
+    { x: join.x + (join.x - base.x) * 0.06, z: join.z + (join.z - base.z) * 0.06 },
+  ];
+  // Narrower than the spine: this is the track the base uses, not the road
+  // everybody else does.
+  stampRoad(mask, spur, ROAD_HALF - 0.7, ROAD_VERGE - 0.9);
+
+  return { mask, spine: pts };
 }
 
 /**
@@ -2159,13 +2638,21 @@ export function prepareImportedMap(world: VoxelWorld): MapLayout {
 
   buildStarterFort(world, layout, baseY, base);
   buildTown(world, layout, makeRng(4211), townY, townCenter);
-  // No carved ramps here, so the road leaves the pad on the bearing of
-  // whichever notional mouth points nearest the village.
+  // No carved ramps here, and no authored spine either -- an imported map has
+  // its own terrain and nothing to say where a road across it should go. So it
+  // gets the one run that has to exist: base to village, and out the far side
+  // of the village so the mask keeps the trees off the approach.
   paintRoad(
     world, heights,
-    planRoad(base, townCenter, layout.rampMouths.map(
-      (m) => Math.atan2(m.z - base.z, m.x - base.x),
-    )),
+    planRoad(
+      base,
+      layout.rampMouths.map((m) => Math.atan2(m.z - base.z, m.x - base.x)),
+      [
+        { x: townCenter.x - TOWN_RADIUS - 10, z: townCenter.z },
+        { x: townCenter.x, z: townCenter.z },
+        { x: townCenter.x + TOWN_RADIUS + 10, z: townCenter.z },
+      ],
+    ).mask,
     townCenter,
   );
 
@@ -2186,12 +2673,23 @@ export function prepareImportedMap(world: VoxelWorld): MapLayout {
 /** How far under the surface the galleries run. Mirrors ai/TunnelNetwork. */
 const TUNNEL_DEPTH = 5;
 /** Trunk lines driven in toward the hill from the treeline. */
-const TUNNEL_LINES = 5;
+const TUNNEL_LINES = 6;
 /** Blocks between the mouths cut along a line. */
-const MOUTH_SPACING = 21;
+const MOUTH_SPACING = 17;
 /** How close to the hilltop a line is driven before it stops. */
-const TUNNEL_INNER_R = 26;
-const TUNNEL_OUTER_R = 104;
+const TUNNEL_INNER_R = 30;
+/**
+ * How far out they start.
+ *
+ * Under the treeline and a little beyond it, because that is where the digging
+ * would have been done from: the far end of every line is in cover, and the
+ * near end comes up inside the wire. What the network *does* on this map is
+ * give an attacker a way across the open field that is not walking across the
+ * open field -- which is the only reason the clearing is survivable to attack
+ * at all, and the reason a player who never checks the ground behind them loses
+ * the radio to men who never crossed the grass.
+ */
+const TUNNEL_OUTER_R = CLEARING_R + 14;
 
 /**
  * Cuts the network that is already under the valley at first light.
@@ -2211,6 +2709,7 @@ function digTunnelNetwork(
   layout: MapLayout,
   heights: Int16Array,
   rng: () => number,
+  field: Float32Array,
 ): void {
   const surfaceAt = (x: number, z: number): number => {
     if (x < 0 || z < 0 || x >= WORLD_X || z >= WORLD_Z) return 0;
@@ -2257,6 +2756,13 @@ function digTunnelNetwork(
 
       sinceMouth += 1;
       if (sinceMouth < MOUTH_SPACING) continue;
+      // A shaft out in the middle of the field is a hole in a billiard table --
+      // visible from the parapet, and coming up it is suicide. Mouths are cut
+      // in the trees, in the treeline band, and then again close in where the
+      // hill's own skirt gives something to come up behind; the run across the
+      // open grass is dug under and not surfaced.
+      const openHere = field[z * WORLD_X + x];
+      if (openHere > 0.45 && r > MESA_BLEND_R + 32) continue;
       sinceMouth = 0;
 
       // Shaft to daylight. One voxel across: wide enough to climb, narrow

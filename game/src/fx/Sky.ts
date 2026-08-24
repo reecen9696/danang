@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BoxBuilder, Face, FACE_OFFSET } from './boxMesh';
 import { SUN_TO_LIGHT } from '../core/lighting';
+import { RENDER } from '../core/constants';
 
 /**
  * A sky made of blocks: a slab cloud layer and a stepped sun disc.
@@ -49,12 +50,14 @@ const CLOUD_THICK = 3;
 /** Clouds are placed on a jittered grid of this pitch, out to CLOUD_RADIUS. */
 const CLOUD_CELL = 40;
 /**
- * Only a little past RENDER.fogDistance (58, and ~68 up at cloud height where
- * the fog thins). Anything beyond that is fully
- * fogged to the sky colour, so it is geometry that can never be seen -- at 150
- * more than half the quads were exactly that.
+ * Only a little past RENDER.fogDistance -- and a little further still, because
+ * the fog thins with height and the layer is up at CLOUD_Y. Anything beyond
+ * that is fully fogged to the sky colour, so it is geometry that can never be
+ * seen. Derived rather than written down: the fog distance is a gameplay
+ * number that gets retuned, and a fixed radius here silently becomes either a
+ * ring of missing sky or a few thousand quads of pure fog.
  */
-const CLOUD_RADIUS = 105;
+const CLOUD_RADIUS = Math.round(RENDER.fogDistance * 1.25);
 /** Fraction of grid cells that actually carry a cloud. */
 const CLOUD_COVERAGE = 0.72;
 /**

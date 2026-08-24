@@ -16,7 +16,8 @@
     "smoke": "node test/smoke.mjs",
     "test:ff": "node test/ff.mjs",
     "test:targeting": "tsx test/targeting.ts",
-    "test:village": "tsx test/village.ts"
+    "test:village": "tsx test/village.ts",
+    "map:preview": "tsx test/map-preview.ts"
   },
   "dependencies": {
     "@colyseus/core": "0.16.24",

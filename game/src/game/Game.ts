@@ -14,6 +14,7 @@ import { makeAceFog } from '../core/fog';
 import { buildFlags } from '../fx/Flags';
 import { Farmers } from '../fx/Farmers';
 import { Rice } from '../fx/Rice';
+import { Grass } from '../fx/Grass';
 import { Townsfolk, Carry } from '../fx/Townsfolk';
 import { Ox } from '../fx/Ox';
 import { Sky } from '../fx/Sky';
@@ -201,6 +202,7 @@ export class Game {
   private farmers: Farmers | null = null;
   /** The crop they are working, and the wind in it. */
   private rice: Rice | null = null;
+  private grass: Grass | null = null;
   /** The merchants and the villagers around them. Scenery, like the farmers. */
   private townsfolk: Townsfolk | null = null;
   /** The village buffalo, grazing the open ground by the west gate. */
@@ -414,6 +416,12 @@ export class Game {
     // a grown plot and the men crossing the field lose you (ai/BotManager).
     this.rice = new Rice(this.layout.ricePatches);
     this.scene.add(this.rice.mesh);
+    // Ground cover everywhere else. Same trick, no tactical consequence: it is
+    // ankle high and you walk straight through it. What it is for is the
+    // clearing, which without something growing on it is a hundred blocks of
+    // one flat colour in every direction.
+    this.grass = new Grass(this.world);
+    this.scene.add(this.grass.group);
     // The village working the paddy below the hill. Client-side, like the
     // flags: nothing here collides or reaches the server. They can be shot,
     // and they run from anything that goes off near them, but that is resolved
@@ -945,6 +953,7 @@ export class Game {
     // thing on screen that moves, and a still frame reads as a screenshot.
     this.farmers?.update(dt);
     this.rice?.update(dt);
+    this.grass?.update(dt, this.camera.position);
     this.townsfolk?.update(dt, this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.ox?.update(dt);
     this.chunks.setFocus(this.camera.position);
@@ -1152,6 +1161,7 @@ export class Game {
     this.villageMusic.setListener(this.distanceOutsideTown(), dt);
     this.farmers?.update(dt);
     this.rice?.update(dt);
+    this.grass?.update(dt, this.camera.position);
     this.projectiles.update(dt);
     this.particles.update(dt);
     this.smoke.update(dt);

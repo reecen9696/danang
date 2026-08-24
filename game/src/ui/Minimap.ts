@@ -93,17 +93,37 @@ export class Minimap {
     ctx.arc(0, 0, half - 2, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Base marker — the command post icon, counter-rotated so it stays upright.
-    {
-      const [bx, bz] = plot(base.x, base.z);
-      this.drawMarker(this.imgPost, bx, bz, 14, yaw, '#4ea3ff');
-    }
+    /**
+     * Places an objective marker, pinning it to the rim when it is off the map.
+     *
+     * The two objectives are the only things on the radar that are *always*
+     * worth a bearing. On a map where the village is a hundred and seventy
+     * blocks out through the trees, a marker that simply vanishes past the edge
+     * of the dish is a marker that is absent exactly when it is needed -- the
+     * whole question the player is asking on the walk out is "which way is the
+     * shop". So an off-map objective slides to the rim and dims: still there,
+     * still a bearing, visibly not a range.
+     */
+    const objective = (
+      img: HTMLImageElement, wx: number, wz: number, tint: string,
+    ): void => {
+      let [x, z] = plot(wx, wz);
+      const d = Math.hypot(x, z);
+      const rim = half - 9;
+      if (d > rim) {
+        const k = rim / d;
+        x *= k;
+        z *= k;
+        ctx.globalAlpha = 0.55;
+      }
+      this.drawMarker(img, x, z, 14, yaw, tint);
+      ctx.globalAlpha = 1;
+    };
 
-    // Town marker — the intel icon, brighter while you're standing in it.
-    {
-      const [tx, tz] = plot(town.x, town.z);
-      this.drawMarker(this.imgIntel, tx, tz, 14, yaw, inTown ? '#ffc63f' : '#c99a2e');
-    }
+    // The firebase — the command post icon, counter-rotated so it stays upright.
+    objective(this.imgPost, base.x, base.z, '#4ea3ff');
+    // The village — the intel icon, brighter while you're standing in it.
+    objective(this.imgIntel, town.x, town.z, inTown ? '#ffc63f' : '#c99a2e');
 
     // Enemies
     for (const bot of bots.bots) {

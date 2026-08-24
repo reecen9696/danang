@@ -58,6 +58,23 @@ const NEIGHBOR_X = [1, -1, 0, 0, 1, 1, -1, -1];
 const NEIGHBOR_Z = [0, 0, 1, -1, 1, -1, 1, -1];
 
 /**
+ * How far from an objective the field is built, in blocks.
+ *
+ * The sweep is a Dijkstra over every cell it is allowed to reach, so on a
+ * 512-block map letting it reach all of them means a quarter of a million cells
+ * of work every rebuild -- most of it describing routes across mountains nobody
+ * will ever stand on. This bounds it to the ground the fight is actually on:
+ * the clearing, the treeline, the jungle the camps are in, and the village.
+ *
+ * The number has to clear the furthest thing that ever paths home, which is a
+ * jungle camp's garrison. Worldgen puts those out to about two hundred blocks
+ * (see OUTPOST_ANCHORS), so this has room over that; anything beyond it reads
+ * as unreachable and a bot out there falls back on walking toward the objective
+ * (see ai/Bot), which is the right answer for open country anyway.
+ */
+const NAV_RADIUS = 224;
+
+/**
  * Weighted flow field over the world surface.
  *
  * The important difference from a plain BFS is that walls are *expensive*
@@ -149,6 +166,27 @@ export class NavGrid {
       }
     }
 
+    // The window this rebuild works in: everything within NAV_RADIUS of any
+    // objective. Computed as one box rather than per-seed discs -- two seeds
+    // are the core and the player, they are rarely far apart, and a box test is
+    // two comparisons in the innermost loop of the whole AI.
+    let minX = WORLD_X;
+    let maxX = 0;
+    let minZ = WORLD_Z;
+    let maxZ = 0;
+    for (const seed of this.seeds) {
+      const sx = seed % WORLD_X;
+      const sz = (seed / WORLD_X) | 0;
+      if (sx - NAV_RADIUS < minX) minX = sx - NAV_RADIUS;
+      if (sx + NAV_RADIUS > maxX) maxX = sx + NAV_RADIUS;
+      if (sz - NAV_RADIUS < minZ) minZ = sz - NAV_RADIUS;
+      if (sz + NAV_RADIUS > maxZ) maxZ = sz + NAV_RADIUS;
+    }
+    minX = Math.max(1, minX);
+    minZ = Math.max(1, minZ);
+    maxX = Math.min(WORLD_X - 2, maxX);
+    maxZ = Math.min(WORLD_Z - 2, maxZ);
+
     let key = 0;
     while (this.pending > 0 && key < UNREACHABLE) {
       const b = key & BUCKET_MASK;
@@ -173,7 +211,7 @@ export class NavGrid {
           const oz = NEIGHBOR_Z[k];
           const nx = cx + ox;
           const nz = cz + oz;
-          if (nx < 1 || nz < 1 || nx >= WORLD_X - 1 || nz >= WORLD_Z - 1) continue;
+          if (nx < minX || nz < minZ || nx > maxX || nz > maxZ) continue;
           const n = nz * WORLD_X + nx;
           if (cost[n] <= key) continue;
 

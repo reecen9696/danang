@@ -9,14 +9,29 @@
 // ---------------------------------------------------------------------------
 // World dimensions. 1 unit == 1 voxel. Y is up (AoS used Z-up; we convert).
 // ---------------------------------------------------------------------------
-export const WORLD_X = 256;
+/**
+ * 512 blocks square.
+ *
+ * The map is a bowl: a flat open field in the middle with the firebase on it,
+ * a treeline around that at about a hundred blocks, jungle out from there, and
+ * a mountain rim at the edge instead of a coastline. Every one of those bands
+ * needs room to be a band rather than a line, which is what the old 256 could
+ * not give -- at that size the clearing, the trees and the far side of the map
+ * were all inside one fog distance of each other and the whole thing read as a
+ * single crowded room. See voxel/worldgen.ts for the layout itself.
+ *
+ * Y stays at 64. The rim tops out around 52 and the field sits at 22, which is
+ * thirty blocks of relief -- enough for the mountains to close the horizon
+ * without paying 50% more memory for air nobody flies through.
+ */
+export const WORLD_X = 512;
 export const WORLD_Y = 64;
-export const WORLD_Z = 256;
+export const WORLD_Z = 512;
 
 export const CHUNK = 32;
-export const CHUNKS_X = WORLD_X / CHUNK; // 8
+export const CHUNKS_X = WORLD_X / CHUNK; // 16
 export const CHUNKS_Y = WORLD_Y / CHUNK; // 2
-export const CHUNKS_Z = WORLD_Z / CHUNK; // 8
+export const CHUNKS_Z = WORLD_Z / CHUNK; // 16
 export const CHUNK_COUNT = CHUNKS_X * CHUNKS_Y * CHUNKS_Z;
 
 export const WATER_LEVEL = 18;
@@ -168,20 +183,38 @@ export const RENDER = {
   vmFov: 55,
   adsFov: 45,
   near: 0.08,
-  far: 320,
+  /**
+   * Just past the fog, plus room for the sun disc at 190.
+   *
+   * Everything beyond `fogDistance` is solid fog colour, so drawing it is
+   * drawing grey over grey. On a 512-block map that is most of the map, which
+   * is why this is no longer the old 320.
+   */
+  far: 260,
   /**
    * Horizontal view distance in blocks, past which everything is solid fog.
    *
-   * AoS uses 128 (OpenSpades `GLRenderer::fogDistance`); this sits deliberately
-   * well inside that for the jungle, where the air is the point. Note the curve
-   * is quadratic and saturates *at* this distance, so haze is already heavy at
-   * around 60% of it -- roughly 35 blocks here.
+   * It used to be 58, which was right when the map was one crowded valley and
+   * wrong the moment the firebase was put in the middle of an open field: the
+   * treeline ring is the thing the whole clearing is shaped by, and a view
+   * distance that stopped half way across the field meant the player never saw
+   * it.
    *
-   * This is a gameplay number as much as a visual one: worldgen puts the wave
-   * spawn ring at 100 blocks, so anything under ~100 means attackers form up
-   * inside the fog and emerge from it rather than being visible on approach.
+   * The figure is set off the treeline rather than off AoS's 128, and it has to
+   * be a good deal *more* than that distance rather than equal to it. The curve
+   * is quadratic and saturates *at* this number, so a fog distance of 112 with
+   * a treeline at 108 does not put the trees at the limit of sight -- it puts
+   * them past it, and the player looks out at a wall of grey. At 160 the same
+   * trees sit at about 45% of the way along the curve, which is the thing that
+   * was actually wanted: a green mass you can read the shape of, hazed enough
+   * that a man standing in front of it is a movement rather than a target.
+   *
+   * This is therefore a gameplay number as much as a visual one. Worldgen forms
+   * the waves up behind that treeline, and what the player gets to see is that
+   * men are coming out of the trees -- not what they are until they are well
+   * onto the grass.
    */
-  fogDistance: 58,
+  fogDistance: 160,
   fogColor: FOG_COLOR,
   skyColor: FOG_COLOR,
   /** Dynamic-resolution bounds. */

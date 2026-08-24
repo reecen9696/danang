@@ -43,7 +43,8 @@ import { WeaponId } from '../weapons/definitions';
 import {
   buildPaletteIndex,
   COL_RUST, COL_BEDROCK, COL_DIRT_DARK, COL_LATERITE, COL_LATERITE_DARK,
-  COL_MUD, COL_GRAVEL,
+  COL_MUD, COL_GRAVEL, COL_STEEL, COL_STEEL_DARK, COL_CONCRETE_DARK,
+  COL_SANDBAG, COL_CANVAS, COL_WOOD_DARK, COL_PLANK, COL_WOOD,
 } from './palette';
 
 // ---------------------------------------------------------------------------
@@ -74,8 +75,23 @@ export interface CrashSite {
 }
 
 export interface CrashContext {
-  /** Centre of the village. The wreck is placed north of it. */
-  town: { x: number; z: number };
+  /** Where the layout wants it. The search only looks for level ground near it. */
+  anchor: { x: number; z: number };
+  /**
+   * Unit vector in world XZ that the ship was travelling along.
+   *
+   * The scar is ploughed backwards up this, so pointing it inward from the
+   * anchor is what puts the lane of snapped canopy behind the wreck instead of
+   * in front of it.
+   */
+  headingX: number;
+  headingZ: number;
+  /**
+   * Somewhere worth walking to from the wreck -- in practice the nearest point
+   * on the road. A foot-track is worn between the two, which is what says
+   * people have already been out here to look at it.
+   */
+  trackTo?: { x: number; z: number } | null;
   /** Terrain heights, in the worldgen layout. Updated where the scar is cut. */
   heights: Int16Array;
   /** True where the road runs, so the wreck doesn't land on it. */
@@ -89,18 +105,16 @@ export interface CrashContext {
 // ---------------------------------------------------------------------------
 
 /**
- * Where to look, measured north of the village shelf's northern edge.
+ * How far the wreck may drift off its anchor while looking for level ground.
  *
- * Near enough that it is visibly *the village's* wreck and you can see the
- * rotor over the huts from the market square; far enough out that the fight
- * over it, when the garrison comes to see what the noise was, happens in the
- * trees rather than in the street.
+ * Small, and deliberately so. Where the wreck lies is a layout decision -- it
+ * is the first landmark off the spawn, it has to be visible from the parapet,
+ * and the paddy is laid out beside it -- so the search is not looking for a
+ * good spot, it is looking for the flattest few blocks near a spot somebody
+ * already chose.
  */
-const NORTH_MIN = 26;
-const NORTH_MAX = 40;
-/** How far either side of the village's axis it may sit. */
-const LATERAL = 16;
-const TRIES = 160;
+const DRIFT = 16;
+const TRIES = 200;
 
 /**
  * Ground the wreck needs, as a radius around the hull centre.
@@ -116,15 +130,14 @@ const MAX_RELIEF = 5;
 /**
  * How the ship is lying.
  *
- * It came in from the north-east on a shallow descent, so the nose points
- * south-west and off the grid by a comfortable margin -- far enough that no
- * face of it lines up with a chunk boundary, which is what would give the
- * whole thing away as level geometry. Nose down nine degrees where it dug in,
- * and settled fifteen onto the port side, which lifts the starboard cargo door
- * clear of the dirt. That last number is doing real work: any more and the
- * doorway becomes a hatch in the ceiling and the crates are unreachable.
+ * Yaw comes from the caller -- the ship was going wherever the layout says it
+ * was going -- and is nudged off the grid by a fraction of a radian, because a
+ * face of the hull lined up with a chunk boundary is what gives the whole thing
+ * away as level geometry. Nose down nine degrees where it dug in, and settled
+ * fifteen onto the port side, which lifts the starboard cargo door clear of the
+ * dirt. That last number is doing real work: any more and the doorway becomes a
+ * hatch in the ceiling and the crates are unreachable.
  */
-const YAW = -1.94;
 const PITCH = -0.16;
 const ROLL = -0.26;
 /** Height of the underside above the surface. The port chine digs in from here. */
@@ -158,6 +171,22 @@ const SOOT = buildPaletteIndex(0, 6);
 /** Torn metal, where the paint went with the panel. */
 const BARE = buildPaletteIndex(0, 14);
 const BARE_DARK = buildPaletteIndex(0, 9);
+
+/**
+ * Air delivery crates: unpainted timber with olive banding.
+ *
+ * Kept pale on purpose. The stack beside the wreck is the thing the player is
+ * meant to see from the parapet and walk out to, and it is sitting next to an
+ * airframe painted in faded khaki -- so it has to be lighter than the wreck as
+ * well as lighter than the grass, or the whole site reads as one khaki lump.
+ * The timber comes out of the fixed range, which already carries sawn planking;
+ * only the strapping needs the build palette, because nothing in the fixed
+ * range is army olive.
+ */
+const CRATE_TIMBER = COL_PLANK;
+const CRATE_TIMBER_DARK = COL_WOOD;
+const CRATE_LID = COL_CANVAS;
+const CRATE_BAND = buildPaletteIndex(2, 3);
 
 /**
  * One box in model space, in blocks.
@@ -413,13 +442,17 @@ export function placeCrashSite(
   rng: () => number,
   ctx: CrashContext,
 ): CrashSite | null {
-  const { heights, town } = ctx;
+  const { heights, anchor } = ctx;
 
-  let best: { x: number; z: number; g: number; relief: number } | null = null;
+  let best: { x: number; z: number; g: number; relief: number; drift: number } | null = null;
 
   for (let t = 0; t < TRIES; t++) {
-    const cx = Math.round(town.x + (rng() * 2 - 1) * LATERAL);
-    const cz = Math.round(town.z - (NORTH_MIN + rng() * (NORTH_MAX - NORTH_MIN)));
+    // The anchor first, then outward: a wreck that could have lain exactly
+    // where it was asked to lies exactly there.
+    const a = rng() * Math.PI * 2;
+    const r = t === 0 ? 0 : (t / TRIES) * DRIFT;
+    const cx = Math.round(anchor.x + Math.cos(a) * r);
+    const cz = Math.round(anchor.z + Math.sin(a) * r);
 
     const margin = PAD_R + 12;
     if (cx < margin || cz < margin || cx >= WORLD_X - margin || cz >= WORLD_Z - margin) continue;
@@ -444,16 +477,15 @@ export function placeCrashSite(
     const relief = hi - lo;
     if (relief > MAX_RELIEF) continue;
 
-    // Flattest wins, and among equals the northernmost -- a wreck that settled
-    // deeper into the trees is a better reason to walk out to it.
-    if (!best || relief < best.relief || (relief === best.relief && cz < best.z)) {
-      best = { x: cx, z: cz, g, relief };
+    // Flattest wins, and among equals the one nearest the anchor.
+    if (!best || relief < best.relief || (relief === best.relief && r < best.drift)) {
+      best = { x: cx, z: cz, g, relief, drift: r };
     }
-    if (relief === 0) break;
+    if (relief === 0 && t === 0) break;
   }
 
   if (!best) return null;
-  return build(world, heights, best.x, best.z, best.g, rng);
+  return build(world, heights, best.x, best.z, best.g, rng, ctx);
 }
 
 /**
@@ -471,8 +503,12 @@ function build(
   cz: number,
   g: number,
   rng: () => number,
+  ctx: CrashContext,
 ): CrashSite {
-  const yaw = YAW + (rng() - 0.5) * 0.18;
+  // Model +X is the nose, and world heading is (cos yaw, -sin yaw), so this
+  // inverts the caller's heading back into a yaw. The nudge keeps the hull off
+  // any axis it could be mistaken for having been built on.
+  const yaw = Math.atan2(-ctx.headingZ, ctx.headingX) + (rng() - 0.5) * 0.18;
   // Direction of travel. Model +X is the nose, so this is model +X in world.
   const hx = Math.cos(yaw);
   const hz = -Math.sin(yaw);
@@ -497,6 +533,15 @@ function build(
   };
   stamp(world, BOOM_SLABS, boom.x, boom.y, boom.z, boom.yaw, boom.pitch, boom.roll);
 
+  // --- The dump ------------------------------------------------------------
+  // What came off the ship and is now lying beside it. This is the part that
+  // turns a prop into a place: a wreck on its own is something that happened,
+  // and a wreck with the load stacked out on the grass beside it, a radio set
+  // up on a crate with its antenna guyed off, and somebody's track worn back
+  // to the road is somewhere people have already been.
+  dressSite(world, heights, cx, cz, hx, hz, rng);
+  if (ctx.trackTo) wearTrack(world, heights, cx, cz, ctx.trackTo.x, ctx.trackTo.z);
+
   // --- What it was carrying ------------------------------------------------
   // Both crates are on the cabin floor inside the starboard door, far enough
   // apart that the prompt never has to choose between them and close enough to
@@ -520,6 +565,163 @@ function build(
       cache(-0.6, 1.2, 0.55, WeaponId.Thumper),
     ],
   };
+}
+
+/**
+ * The load, stacked out on the grass on the starboard side.
+ *
+ * Everything here is voxels rather than the sub-voxel geometry the rotor and
+ * the crates in the bay use, and that is the right call for once: these are
+ * boxes, and a box is the one thing the grid draws well. They are also the only
+ * things at the site the player can climb on and shoot from behind, which is
+ * why they go a short walk clear of the hull rather than up against it -- a
+ * pile of crates hard against the fuselage is scenery, and a pile eight blocks
+ * off it is the only cover on this side of the field.
+ *
+ * The radio is dressing and not the Core: the set the player actually defends
+ * is the one on the slab up on the hill (see buildStarterFort). This one is
+ * the reason there is a set on the hill at all.
+ */
+function dressSite(
+  world: VoxelWorld,
+  heights: Int16Array,
+  cx: number,
+  cz: number,
+  hx: number,
+  hz: number,
+  rng: () => number,
+): void {
+  // Starboard of the hull, which is the side the cargo door came to rest on.
+  const sx = -hz;
+  const sz = hx;
+  /** A point `along` the ship's heading and `out` to starboard, in blocks. */
+  const at = (along: number, out: number): { x: number; z: number; y: number } => {
+    const x = Math.round(cx + hx * along + sx * out);
+    const z = Math.round(cz + hz * along + sz * out);
+    return { x, z, y: heightAt(heights, x, z) };
+  };
+
+  /** A crate: timber sides, a banded lid, and a stencil on the end. */
+  const crate = (bx: number, by: number, bz: number, w: number, d: number, h: number): void => {
+    for (let y = 0; y < h; y++) {
+      for (let z = 0; z < d; z++) {
+        for (let x = 0; x < w; x++) {
+          const edge = x === 0 || x === w - 1 || z === 0 || z === d - 1;
+          const lid = y === h - 1;
+          const gr = grain(bx + x, by + y, bz + z);
+          const col = lid ? (gr < 0.3 ? CRATE_BAND : CRATE_LID)
+            : edge ? (gr < 0.28 ? CRATE_BAND : gr < 0.75 ? CRATE_TIMBER : CRATE_TIMBER_DARK)
+              : CRATE_TIMBER_DARK;
+          setSolid(world, bx + x, by + y, bz + z, col, Mat.Wood);
+        }
+      }
+    }
+  };
+
+  // Three crates in a stack and two more thrown down beside them: an air
+  // delivery load looks like something that was pushed out of a door, not
+  // like a shop display.
+  const dump = at(-1.5, 7.5);
+  crate(dump.x, dump.y + 1, dump.z, 3, 2, 2);
+  crate(dump.x + 3, dump.y + 1, dump.z, 2, 2, 1);
+  crate(dump.x, dump.y + 3, dump.z, 2, 2, 1);
+  const spill = at(-4.5, 6.5);
+  crate(spill.x, spill.y + 1, spill.z, 2, 3, 1);
+
+  // The ammunition, in steel boxes rather than timber, stacked apart from the
+  // rest of it because that is where you put it and because the colour change
+  // is what makes the two piles read as two different things.
+  const ammo = at(2.5, 7.0);
+  for (let i = 0; i < 4; i++) {
+    const bx = ammo.x + (i & 1);
+    const bz = ammo.z + (i >> 1);
+    const top = ammo.y + 1 + (i === 3 ? 1 : 0);
+    setSolid(world, bx, top, bz, grain(bx, top, bz) < 0.4 ? COL_STEEL_DARK : COL_STEEL, Mat.Steel);
+  }
+  // Belted rounds spilled out of the open one.
+  const belt = at(2.0, 5.6);
+  setSolid(world, belt.x, belt.y + 1, belt.z, COL_RUST, Mat.Steel);
+
+  // The radio, on a crate with the set on top and a whip antenna guyed off it.
+  const radio = at(5.5, 5.5);
+  crate(radio.x, radio.y + 1, radio.z, 2, 2, 1);
+  setSolid(world, radio.x, radio.y + 2, radio.z, COL_CONCRETE_DARK, Mat.Steel);
+  setSolid(world, radio.x + 1, radio.y + 2, radio.z, COL_STEEL_DARK, Mat.Steel);
+  for (let y = 3; y <= 8; y++) {
+    setSolid(world, radio.x, radio.y + y, radio.z, y > 6 ? COL_STEEL : COL_STEEL_DARK, Mat.Steel);
+  }
+  // Ground stake for the guy, a few blocks off, so the antenna has a reason to
+  // be standing up.
+  const stake = at(8.0, 3.5);
+  setSolid(world, stake.x, stake.y + 1, stake.z, COL_WOOD_DARK, Mat.Wood);
+
+  // A tarpaulin thrown over whatever did not fit in a box, and a couple of
+  // fuel drums off the deck.
+  const tarp = at(-0.5, 10.5);
+  for (let dz = 0; dz <= 2; dz++) {
+    for (let dx = 0; dx <= 2; dx++) {
+      if (dx === 1 && dz === 1) continue;
+      setSolid(world, tarp.x + dx, tarp.y + 1, tarp.z + dz,
+        grain(tarp.x + dx, 0, tarp.z + dz) < 0.4 ? COL_CANVAS : COL_SANDBAG, Mat.Wood);
+    }
+  }
+  for (let i = 0; i < 2; i++) {
+    const drum = at(-7.0 - i * 1.6, 8.5 - i * 2.2);
+    const col = rng() < 0.5 ? COL_RUST : COL_STEEL_DARK;
+    setSolid(world, drum.x, drum.y + 1, drum.z, col, Mat.Steel);
+    setSolid(world, drum.x, drum.y + 2, drum.z, col, Mat.Steel);
+  }
+}
+
+/**
+ * Wears a foot-track from the wreck back to `tx, tz`.
+ *
+ * Colour only, one voxel wide plus a ragged margin -- this is a path people
+ * have walked, not a road anybody built, and it should be something you notice
+ * you are following rather than something you are told to follow.
+ */
+function wearTrack(
+  world: VoxelWorld,
+  heights: Int16Array,
+  cx: number,
+  cz: number,
+  tx: number,
+  tz: number,
+): void {
+  const span = Math.hypot(tx - cx, tz - cz);
+  if (span < 4) return;
+  const steps = Math.ceil(span);
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    // A slack curve rather than a ruled line: the perpendicular offset peaks in
+    // the middle of the run and goes to nothing at both ends.
+    const bow = Math.sin(t * Math.PI) * 5;
+    const px = cx + (tx - cx) * t + (-(tz - cz) / span) * bow;
+    const pz = cz + (tz - cz) * t + ((tx - cx) / span) * bow;
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const x = Math.round(px) + dx;
+        const z = Math.round(pz) + dz;
+        if (x < 1 || z < 1 || x >= WORLD_X - 1 || z >= WORLD_Z - 1) continue;
+        const d = Math.hypot(x + 0.5 - px, z + 0.5 - pz);
+        if (d > 1.9) continue;
+        const gr = grain(x, 0, z);
+        // Ragged at the edge: about a third of the margin keeps whatever was
+        // there, which is what stops the track having a drawn outline.
+        if (d > 1.1 && gr > 0.5) continue;
+        const h = heightAt(heights, x, z);
+        if (h <= WATER_LEVEL) continue;
+        if (world.get(x, h, z) === 0) continue;
+        world.setFast(x, h, z, gr < 0.4 ? COL_LATERITE_DARK : gr < 0.8 ? COL_LATERITE : COL_MUD, Mat.Dirt);
+      }
+    }
+  }
+}
+
+/** Places a voxel, clamped to the world. */
+function setSolid(world: VoxelWorld, x: number, y: number, z: number, color: number, material: number): void {
+  if (x < 0 || z < 0 || y < 0 || x >= WORLD_X || z >= WORLD_Z || y >= WORLD_Y) return;
+  world.setFast(x, y, z, color, material);
 }
 
 /**

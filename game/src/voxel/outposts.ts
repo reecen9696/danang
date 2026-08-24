@@ -45,20 +45,20 @@ export interface OutpostSite {
   tower: { x: number; y: number; z: number };
 }
 
-/** How many camps to put out, and how hard to look for room for them. */
-const OUTPOST_COUNT = 5;
-const OUTPOST_TRIES = 220;
 /**
- * Ring the camps sit in, measured from the firebase.
+ * How far from its anchor a camp will settle for, and how hard it looks.
  *
- * The inner figure clears the mesa's skirt and its ramps, so no camp overlooks
- * the parapet from spitting distance. The outer one stays inside the wave spawn
- * ring at 100 — past that they would be scenery nobody ever walks to.
+ * Each camp is asked for at a specific place (see OUTPOST_ANCHORS in
+ * voxel/worldgen.ts) rather than at a random bearing and radius, because where
+ * a camp is *is* what it is for: one watching the field, one covering the road,
+ * one behind the village. The search here only has to find the flattest patch
+ * of ground near the spot somebody already chose, and give up if there isn't
+ * one.
  */
-const OUTPOST_MIN_R = 46;
-const OUTPOST_MAX_R = 86;
+const ANCHOR_DRIFT = 34;
+const OUTPOST_TRIES = 90;
 /** No two camps closer than this: one firefight should not wake both. */
-const OUTPOST_SPACING = 36;
+const OUTPOST_SPACING = 44;
 /** Radius of the scraped pad. The berm stands just inside it. */
 const OUTPOST_R = 8;
 /** Ground within this of the road is too exposed to camp on. */
@@ -67,8 +67,10 @@ const ROAD_CLEAR = 7;
 const MAX_RELIEF = 6;
 
 export interface OutpostContext {
-  /** Centre of the firebase; camps are placed in a ring around it. */
+  /** Centre of the firebase. Camps face it, and keep their distance from it. */
   base: { x: number; z: number };
+  /** Where each camp wants to be, in world coordinates, in priority order. */
+  anchors: readonly { x: number; z: number }[];
   /** Terrain heights, in the worldgen layout. Updated where the pad is levelled. */
   heights: Int16Array;
   /** True where the road runs, so camps keep off it. */
@@ -149,44 +151,66 @@ export function placeOutposts(
     return false;
   };
 
-  for (let t = 0; t < OUTPOST_TRIES && sites.length < OUTPOST_COUNT; t++) {
-    const a = rng() * Math.PI * 2;
-    const r = OUTPOST_MIN_R + rng() * (OUTPOST_MAX_R - OUTPOST_MIN_R);
-    const cx = Math.round(base.x + Math.cos(a) * r);
-    const cz = Math.round(base.z + Math.sin(a) * r);
-
+  /** Is (cx, cz) somewhere a camp could be scraped? Returns its relief, or -1. */
+  const survey = (cx: number, cz: number): number => {
     const margin = OUTPOST_R + 6;
-    if (cx < margin || cz < margin || cx >= WORLD_X - margin || cz >= WORLD_Z - margin) continue;
-    if (nearRoad(cx, cz)) continue;
+    if (cx < margin || cz < margin || cx >= WORLD_X - margin || cz >= WORLD_Z - margin) return -1;
+    if (nearRoad(cx, cz)) return -1;
 
-    let spaced = true;
     for (const s of sites) {
-      if (Math.hypot(s.x - cx, s.z - cz) < OUTPOST_SPACING) { spaced = false; break; }
+      if (Math.hypot(s.x - cx, s.z - cz) < OUTPOST_SPACING) return -1;
     }
-    if (!spaced) continue;
 
     // Flat, dry, unclaimed ground only. A camp half-buried in a hillside reads
     // as a bug, and one standing in the paddy has nothing to hide behind.
     const g = heightAt(heights, cx, cz);
-    if (g <= WATER_LEVEL + 2) continue;
+    if (g <= WATER_LEVEL + 2) return -1;
     let lo = g;
     let hi = g;
-    let blocked = false;
-    for (let dz = -OUTPOST_R; dz <= OUTPOST_R && !blocked; dz++) {
+    for (let dz = -OUTPOST_R; dz <= OUTPOST_R; dz++) {
       for (let dx = -OUTPOST_R; dx <= OUTPOST_R; dx++) {
         if (dx * dx + dz * dz > OUTPOST_R * OUTPOST_R) continue;
         const x = cx + dx;
         const z = cz + dz;
-        if (ctx.occupied(x, z)) { blocked = true; break; }
+        if (ctx.occupied(x, z)) return -1;
         const h = heightAt(heights, x, z);
-        if (h <= WATER_LEVEL) { blocked = true; break; }
+        if (h <= WATER_LEVEL) return -1;
         if (h < lo) lo = h;
         if (h > hi) hi = h;
       }
     }
-    if (blocked || hi - lo > MAX_RELIEF) continue;
+    const relief = hi - lo;
+    return relief > MAX_RELIEF ? -1 : relief;
+  };
 
-    sites.push(buildOutpost(world, heights, cx, cz, g, base, rng));
+  // One camp per anchor, each taking the flattest ground it can find within a
+  // short walk of where the layout asked for it. The anchor itself is tried
+  // first, so a camp that was asked for somewhere workable ends up exactly
+  // there and only wanders when it has to.
+  for (const anchor of ctx.anchors) {
+    let best: { x: number; z: number } | null = null;
+    let bestRelief = Infinity;
+    for (let t = 0; t < OUTPOST_TRIES; t++) {
+      let cx = Math.round(anchor.x);
+      let cz = Math.round(anchor.z);
+      if (t > 0) {
+        // Spiralling outward, so near misses are looked at before distant ones
+        // and a camp never drifts further than it had to.
+        const a = rng() * Math.PI * 2;
+        const r = (t / OUTPOST_TRIES) * ANCHOR_DRIFT;
+        cx = Math.round(anchor.x + Math.cos(a) * r);
+        cz = Math.round(anchor.z + Math.sin(a) * r);
+      }
+      const relief = survey(cx, cz);
+      if (relief < 0 || relief >= bestRelief) continue;
+      best = { x: cx, z: cz };
+      bestRelief = relief;
+      if (relief === 0) break;
+    }
+    if (!best) continue;
+    sites.push(buildOutpost(
+      world, heights, best.x, best.z, heightAt(heights, best.x, best.z), base, rng,
+    ));
   }
 
   return sites;
