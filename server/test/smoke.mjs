@@ -1,7 +1,11 @@
 import { Client } from 'colyseus.js';
 
-const client = new Client('ws://localhost:2567');
+// Point at a deployed server with SMOKE_SERVER, e.g.
+//   SMOKE_SERVER=wss://au-mel-fb0c9d92.colyseus.cloud npm run smoke
+const endpoint = process.env.SMOKE_SERVER || process.argv[2] || 'ws://localhost:2567';
+const client = new Client(endpoint);
 const log = (...a) => console.log('[smoke]', ...a);
+log('endpoint:', endpoint);
 
 const a = await client.joinOrCreate('defense', { name: 'Alice' });
 log('A joined, sessionId =', a.sessionId);
