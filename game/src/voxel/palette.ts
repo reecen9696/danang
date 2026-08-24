@@ -303,3 +303,30 @@ export function nearestPaletteIndex(r: number, g: number, b: number): number {
   }
   return best;
 }
+
+// ---------------------------------------------------------------------------
+// Foliage
+// ---------------------------------------------------------------------------
+
+/**
+ * The greens a plant is drawn in: the canopy, frond and shrub ramps that
+ * worldgen shades trees and bushes from.
+ *
+ * Kept as a set rather than a range because the fixed block of the palette is
+ * ordered by when each colour was needed, not by what it is -- the jungle
+ * greens sit at 58..60 and the temperate leaf greens at 22..24, with trunk
+ * browns in between. Anything listed here breaks into leaves when it is shot
+ * (see fx/Leaves); everything else breaks into chips of itself.
+ *
+ * Bark and bamboo are deliberately out: a culm is a stick, and a round into a
+ * trunk should throw splinters the colour of the trunk.
+ */
+const FOLIAGE = new Set<number>([
+  COL_LEAF, COL_LEAF_DARK, COL_LEAF_LIGHT,
+  COL_PALM, COL_BUSH,
+  COL_JUNGLE, COL_JUNGLE_DARK, COL_JUNGLE_LIGHT,
+]);
+
+export function isFoliage(color: number): boolean {
+  return FOLIAGE.has(color);
+}

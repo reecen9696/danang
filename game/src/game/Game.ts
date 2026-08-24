@@ -23,7 +23,9 @@ import { ChunkManager } from '../voxel/ChunkManager';
 import { generateWorld, prepareImportedMap, type MapLayout } from '../voxel/worldgen';
 import { loadVxlFromUrl } from '../voxel/vxl';
 import { raycastVoxels } from '../voxel/raycast';
-import { palette, AIR, BUILD_HUES, BUILD_SHADES, COL_CORE, COL_SANDBAG, COL_STEEL } from '../voxel/palette';
+import {
+  palette, isFoliage, AIR, BUILD_HUES, BUILD_SHADES, COL_CORE, COL_SANDBAG, COL_STEEL,
+} from '../voxel/palette';
 import { Player, type MoveIntent } from '../player/Player';
 import { Loadout, Slot, BUILDABLE } from '../player/Loadout';
 import { ViewModel } from '../player/ViewModel';
@@ -38,6 +40,8 @@ import { ParticleSystem } from '../fx/Particles';
 import { TracerSystem } from '../fx/Tracers';
 import { DecalSystem } from '../fx/Decals';
 import { BloodSystem } from '../fx/Blood';
+import { SmokeSystem } from '../fx/Smoke';
+import { LeafSystem } from '../fx/Leaves';
 import { Economy, POINTS, ShopKind, ItemEffect, stocks, type ShopItem } from './Economy';
 import {
   DeployableManager, DeployId, DEPLOYABLES, TURRET, occupies,
@@ -231,6 +235,8 @@ export class Game {
   private tracers!: TracerSystem;
   private decals!: DecalSystem;
   private blood!: BloodSystem;
+  private smoke!: SmokeSystem;
+  private leaves!: LeafSystem;
 
   private readonly hud = new HUD();
   private readonly minimap: Minimap;
@@ -389,8 +395,13 @@ export class Game {
     this.tracers = new TracerSystem();
     this.decals = new DecalSystem(this.world);
     this.blood = new BloodSystem(this.world);
+    // The two halves of what a hit leaves behind: smoke hangs over where a
+    // shell landed, leaves come off whatever the round went through.
+    this.smoke = new SmokeSystem();
+    this.leaves = new LeafSystem((x, y, z) => this.world.isSolid(x, y, z));
     this.scene.add(
       this.particles.points, this.tracers.lines, this.decals.group, this.blood.mesh,
+      this.smoke.mesh, this.leaves.mesh,
     );
     // Flags are sub-voxel scenery rather than blocks, so they're mesh geometry
     // hung on the layout's flag sites instead of being written into the world.
@@ -981,6 +992,8 @@ export class Game {
     this.bots.clear();
     this.projectiles.clear();
     this.particles.clear();
+    this.smoke.clear();
+    this.leaves.clear();
     this.tracers.clear();
     this.blood.clear();
     this.deployables.clear();
@@ -1141,6 +1154,8 @@ export class Game {
     this.rice?.update(dt);
     this.projectiles.update(dt);
     this.particles.update(dt);
+    this.smoke.update(dt);
+    this.leaves.update(dt);
     this.tracers.update(dt);
     this.decals.update();
     this.blood.update(dt);
@@ -2223,14 +2238,10 @@ export class Game {
         5 + Math.random() * 5, 0.35 + Math.random() * 0.5, 14, 1.4,
       );
     }
-    for (let i = 0; i < 20; i++) {
-      this.particles.spawn(
-        x + (Math.random() - 0.5) * 3, y + Math.random() * 2, z + (Math.random() - 0.5) * 3,
-        (Math.random() - 0.5) * 3, 1.5 + Math.random() * 2, (Math.random() - 0.5) * 3,
-        0.28, 0.27, 0.26, 0.55,
-        14 + Math.random() * 10, 1.4 + Math.random(), -2, 1.2,
-      );
-    }
+    // The fireball above is over in half a second. What is left standing
+    // afterwards is the smoke, and it is scaled off the same radius the damage
+    // was, so a tank shell marks the valley for longer than a grenade does.
+    this.smoke.blast(x, y, z, r);
   }
 
   // -------------------------------------------------------------------------
@@ -3089,6 +3100,7 @@ export class Game {
       `bots       ${this.bots.livingCount} in ${this.bots.squadCount} squads\n` +
       `navfield   ${this.nav.lastRebuildMs.toFixed(2)} ms\n` +
       `particles  ${this.particles.activeCount}\n` +
+      `smoke      ${this.smoke.activeCount} puffs, ${this.leaves.activeCount} leaves\n` +
       `damaged    ${this.world.damagedVoxels.size}\n` +
       `pos        ${this.player.position.x.toFixed(1)}, ${this.player.position.y.toFixed(1)}, ${this.player.position.z.toFixed(1)}`,
     );
@@ -3157,6 +3169,12 @@ export class Game {
     const r = palette[color * 3] / 255;
     const g = palette[color * 3 + 1] / 255;
     const b = palette[color * 3 + 2] / 255;
+    // A canopy block that goes does not shatter -- it comes apart into what it
+    // was made of, and the ground under it ends up covered.
+    if (isFoliage(color)) {
+      this.leaves.burst(x + 0.5, y + 0.5, z + 0.5, r, g, b, count, 0, 0.35, 0, 5);
+      return;
+    }
     for (let i = 0; i < count; i++) {
       this.particles.spawn(
         x + Math.random(), y + Math.random(), z + Math.random(),
@@ -3171,6 +3189,12 @@ export class Game {
     const r = palette[color * 3] / 255;
     const g = palette[color * 3 + 1] / 255;
     const b = palette[color * 3 + 2] / 255;
+    // A round through a branch knocks leaves off it, back along the way it
+    // came, rather than raising a puff of green off a solid surface.
+    if (isFoliage(color)) {
+      this.leaves.burst(x, y, z, r, g, b, 4, nx * 0.6, ny * 0.6 + 0.3, nz * 0.6, 4);
+      return;
+    }
     for (let i = 0; i < 5; i++) {
       this.particles.spawn(
         x + nx * 0.05, y + ny * 0.05, z + nz * 0.05,

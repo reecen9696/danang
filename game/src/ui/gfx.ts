@@ -99,10 +99,17 @@ export interface Flipbook {
 /**
  * The two smoke flipbooks, repacked from their original one-PNG-per-frame form
  * into single atlases so they cost one request instead of 228.
+ *
+ * `frames` is the count that actually has art in it, which is short of the full
+ * grid in both: the packer rounded each atlas up to whole rows and left the
+ * remainder empty. Playing past it would hold a blank cell for a third of the
+ * sequence. `thick` boils at a roughly constant density and is meant to be
+ * faded by whoever draws it; `thin` blooms and thins out over its own run, so a
+ * puff drawn with it dissipates on its own (see fx/Smoke).
  */
 export const SMOKE: Record<'thick' | 'thin', Flipbook> = {
-  thick: { url: tex('Smoke1.png'), cols: 16, rows: 12, frames: 180, cell: 128 },
-  thin: { url: tex('Smoke2.png'), cols: 8, rows: 6, frames: 48, cell: 128 },
+  thick: { url: tex('Smoke1.png'), cols: 16, rows: 12, frames: 108, cell: 128 },
+  thin: { url: tex('Smoke2.png'), cols: 8, rows: 6, frames: 42, cell: 128 },
 };
 
 /**
