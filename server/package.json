@@ -13,7 +13,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "rimraf build && node build.mjs",
     "typecheck": "tsc --noEmit",
-    "smoke": "node test/smoke.mjs"
+    "smoke": "node test/smoke.mjs",
+    "test:ff": "node test/ff.mjs",
+    "test:targeting": "tsx test/targeting.ts"
   },
   "dependencies": {
     "@colyseus/core": "0.16.24",

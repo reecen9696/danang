@@ -16,7 +16,7 @@ import { VoxelWorld } from '../../../game/src/voxel/VoxelWorld';
 import { generateWorld, type MapLayout } from '../../../game/src/voxel/worldgen';
 import { NavGrid } from '../../../game/src/ai/NavGrid';
 import { BotManager } from '../../../game/src/ai/BotManager';
-import type { Bot } from '../../../game/src/ai/Bot';
+import type { Bot, BotTarget } from '../../../game/src/ai/Bot';
 import { WaveManager, Phase } from '../../../game/src/game/WaveManager';
 import { Aggression } from '../../../game/src/game/Aggression';
 import { TunnelNetwork } from '../../../game/src/ai/TunnelNetwork';
@@ -81,14 +81,20 @@ export class ServerSim {
 
   private readonly players = new Map<string, SimPlayer>();
 
-  /** Scratch target the bots steer at, rewritten each tick. */
-  private readonly focus = new THREE.Vector3();
+  /**
+   * What the horde is hunting: one entry per connected player, live.
+   *
+   * Every bot picks its own out of this list, so a squad that spreads out
+   * draws enemies onto each of them rather than the whole wave walking at
+   * whoever happens to be nearest the base. Entries are held by reference and
+   * rewritten in place each tick; the array is only rebuilt when the roster
+   * actually changes, so the steady state allocates nothing.
+   */
+  private readonly targets: BotTarget[] = [];
+  private readonly targetsById = new Map<string, BotTarget>();
 
   /** Reused seed list, so the per-tick reseed doesn't allocate. */
   private readonly seedScratch: { x: number; z: number }[] = [];
-
-  /** Velocity of the engagement target, for shot leading. */
-  private readonly focusVel = new THREE.Vector3();
 
   constructor(readonly seed: number, private readonly events: SimEvents) {
     this.layout = generateWorld(this.world, seed);
@@ -101,12 +107,9 @@ export class ServerSim {
     this.bots = new BotManager({
       world: this.world,
       nav: this.nav,
-      // Bots chase whichever player is currently closest; `focus` is rewritten
-      // in step() and the manager holds the reference, not a copy.
-      playerPos: this.focus,
-      playerVel: this.focusVel,
-      playerEyeY: 0,
-      playerAlive: false,
+      // Held by reference and refreshed in step(); each bot picks its own man
+      // out of it.
+      targets: this.targets,
       objective: new THREE.Vector3(
         this.layout.baseCenter.x, this.layout.baseCenter.y, this.layout.baseCenter.z,
       ),
@@ -221,44 +224,51 @@ export class ServerSim {
     }
     this.nav.setSeeds(this.seedScratch);
 
-    // BotManager still engages a single target, so give it the player holding
-    // the front line — the one nearest the objective.
-    const target = this.nearestLivingPlayer();
-    const ctx = (this.bots as unknown as {
-      ctx: { playerEyeY: number; playerAlive: boolean };
-    }).ctx;
-    if (target) {
-      this.focus.set(target.x, target.y, target.z);
-      this.focusVel.set(target.vx, target.vy, target.vz);
-      ctx.playerEyeY = target.eyeY;
-      ctx.playerAlive = true;
-    } else {
-      this.focusVel.set(0, 0, 0);
-      // Nobody alive: bots fall back to the objective and stop hunting.
-      this.focus.set(this.layout.baseCenter.x, this.layout.baseCenter.y, this.layout.baseCenter.z);
-      ctx.playerAlive = false;
-    }
+    this.syncTargets();
 
     this.nav.update(dt);
     this.bots.update(dt);
     this.waves.update(dt);
   }
 
-  private nearestLivingPlayer(): SimPlayer | null {
-    let best: SimPlayer | null = null;
-    let bestDist = Infinity;
-    const bx = this.layout.baseCenter.x;
-    const bz = this.layout.baseCenter.z;
-    for (const p of this.players.values()) {
-      if (!p.alive) continue;
-      // Rank by distance to the objective: whoever is defending the front line
-      // is the one the wave should be pushing against.
-      const d = (p.x - bx) * (p.x - bx) + (p.z - bz) * (p.z - bz);
-      if (d < bestDist) {
-        bestDist = d;
-        best = p;
-      }
+  /**
+   * Mirrors the player roster into the list the horde hunts.
+   *
+   * Dead players stay in the list with `alive` false rather than being pulled
+   * out of it, so a bot holding one keeps the reference and drops him on its
+   * own next tick instead of the array shifting under the AI mid-frame.
+   */
+  private syncTargets(): void {
+    // Anyone who has disconnected stops existing as far as the enemy cares.
+    for (const [id, t] of this.targetsById) {
+      if (this.players.has(id)) continue;
+      this.targetsById.delete(id);
+      const i = this.targets.indexOf(t);
+      if (i >= 0) this.targets.splice(i, 1);
     }
-    return best;
+
+    for (const p of this.players.values()) {
+      let t = this.targetsById.get(p.id);
+      if (t === undefined) {
+        t = {
+          id: p.id,
+          pos: new THREE.Vector3(),
+          vel: new THREE.Vector3(),
+          eyeY: p.eyeY,
+          alive: p.alive,
+        };
+        this.targetsById.set(p.id, t);
+        this.targets.push(t);
+      }
+      t.pos.set(p.x, p.y, p.z);
+      t.vel.set(p.vx, p.vy, p.vz);
+      t.eyeY = p.eyeY;
+      t.alive = p.alive;
+    }
+  }
+
+  /** Which player a given bot is currently trying to kill, if any. */
+  targetIdOf(bot: Bot): string {
+    return bot.target?.id ?? '';
   }
 }

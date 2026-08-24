@@ -5,6 +5,28 @@ import { BOTS, BotKind, BotRole, type BotDef } from './botTypes';
 import { BlueprintId } from './blueprints';
 import type { Squad } from './Squad';
 
+/**
+ * Someone the enemy would like dead.
+ *
+ * Held by reference, never copied: `pos` and `vel` are the live vectors their
+ * owner keeps writing, and `eyeY`/`alive` are updated on the object each
+ * frame. Single-player builds exactly one of these; a server room builds one
+ * per connected client, which is the whole of "the wave comes for everybody".
+ */
+export interface BotTarget {
+  /** Session id on the server; empty in single-player, where there is only one. */
+  id: string;
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  eyeY: number;
+  alive: boolean;
+  /**
+   * How readable this man is right now -- 1 is upright in the open, less is
+   * crouched/still/sneaking, more is sprinting or shooting. Absent means 1.
+   */
+  visibility?: number;
+}
+
 export const enum BotState {
   /** No contact anywhere in the squad — follow the flow field to the objective. */
   Advance = 0,
@@ -101,6 +123,16 @@ export class Bot {
   boundPhase = 0;
 
   // --- perception ----------------------------------------------------------
+  /**
+   * The man this bot is trying to kill.
+   *
+   * Per-bot rather than per-horde: with a squad on the ground the enemy has to
+   * choose, and two players standing apart should each draw somebody rather
+   * than one of them being ignored. Null only when nobody is left alive.
+   */
+  target: BotTarget | null = null;
+  /** Counts down to the next time this bot reconsiders who it is fighting. */
+  retargetTimer = 0;
   /** Personal line of sight to the target, refreshed on a rotating schedule. */
   seesTarget = false;
   /** Seconds since this bot last had eyes on the target. */
@@ -374,6 +406,8 @@ export class Bot {
     this.role = this.def.role;
     this.boundPhase = 0;
 
+    this.target = null;
+    this.retargetTimer = 0;
     this.seesTarget = false;
     this.sightAge = 999;
     this.aimHeld = 0;

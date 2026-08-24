@@ -59,13 +59,15 @@ export class DefenseRoom extends Room<RoomState> {
       onWaveCleared: (wave) => this.broadcast('waveCleared', { wave }),
       onBotFire: (bot, tx, ty, tz) => {
         // Clients render the shot; the targeted client applies the damage to
-        // itself and reports the new hp back through `move`.
+        // itself and reports the new hp back through `move`. The target is the
+        // man this particular bot was fighting — bots pick their own — so two
+        // players under fire at once each take their own rounds.
         this.broadcast('botFire', {
           slot: this.sim.bots.bots.indexOf(bot),
           weapon: bot.def.weapon,
           x: bot.position.x, y: bot.position.y, z: bot.position.z,
           tx, ty, tz,
-          target: this.focusId,
+          target: this.sim.targetIdOf(bot),
         });
       },
       onBotVoice: (bot, cue) => {
@@ -336,17 +338,4 @@ export class DefenseRoom extends Room<RoomState> {
     }
   }
 
-  /** Session id of the player the bots are currently converging on. */
-  private get focusId(): string {
-    let best = '';
-    let bestDist = Infinity;
-    const bx = this.sim.layout.baseCenter.x;
-    const bz = this.sim.layout.baseCenter.z;
-    this.state.players.forEach((p: PlayerState, id: string) => {
-      if (!p.alive) return;
-      const d = (p.x - bx) * (p.x - bx) + (p.z - bz) * (p.z - bz);
-      if (d < bestDist) { bestDist = d; best = id; }
-    });
-    return best;
-  }
 }

@@ -48,14 +48,29 @@ Terrain is never transferred. The server sends a seed; `generateWorld(world,
 seed)` is deterministic, so every client builds identical terrain and only the
 *edits* need replicating. A late joiner also receives the accumulated edit log.
 
+## What the enemy does about a squad
+
+Every bot picks its own man. `BotWorldContext.targets` is a list — one entry per
+connected player, rebuilt in place each tick by `ServerSim` — and each bot takes
+the nearest living one, keeps him while it has eyes on him, and only swaps for
+somebody meaningfully closer. Pathing splits the same way it always did, through
+`NavGrid.setSeeds()`.
+
+That per-bot choice is also what addresses the damage: `botFire` carries the
+session id of the man that bot was shooting at, and only that client resolves
+the round against itself. Two players under fire at once each take their own.
+
+## Friendly fire
+
+It is on, and there are no teams — a squadmate swept up by your own hitscan
+takes the round. The shooter reports it, the server routes it, the victim
+applies it, which is the same split used for damage taken from bots. The kill
+feed names who did it.
+
 ## Known limits
 
 - **Hits are client-reported.** Fine among friends, not cheat-resistant. See the
   authority table in the server README.
-- **Bots engage one player at a time.** Pathing already splits across all living
-  players via `NavGrid.setSeeds()`, but `BotManager` still aims at a single
-  target — whoever is nearest the objective.
-- **Player-vs-player damage does not exist.** This is co-op only.
 - **A backgrounded tab stalls on the loading screen.** World generation awaits
   `requestAnimationFrame`, which Chrome throttles in hidden tabs. Keep the tab
   in front while it loads. This predates multiplayer but you notice it more when

@@ -131,8 +131,11 @@ function gunLook(weapon: string): GunLook {
 // --- rig -------------------------------------------------------------------
 /**
  * One box: `x, y, z` centre in the soldier's local frame (y is feet-relative,
- * +z is forward), `sx, sy, sz` extent, packed colour, then the joint it swings
- * on — `pitch` radians about X, pivoting at `pvY, pvZ`.
+ * +z is the way he faces), `sx, sy, sz` extent, packed colour, then the joint
+ * it swings on — `pitch` radians about X, pivoting at `pvY, pvZ`.
+ *
+ * The frame is the bots', deliberately, so that the two rigs are one set of
+ * proportions rather than two. Turning a player's yaw into it is `end`'s job.
  */
 type Part = [
   x: number, y: number, z: number,
@@ -284,7 +287,14 @@ export class RemotePlayers {
 
       this.buildPose(r, gait);
 
-      tmpEuler.set(0, r.yaw, 0);
+      // A bot's yaw is the bearing it walks on -- `atan2(dx, dz)` -- so the rig
+      // these share with the bots was built with local +z as the way the man
+      // faces. A player's yaw is his camera's, and a camera looks down -z. The
+      // two conventions are exactly half a turn apart, and without this the
+      // soldier is mounted backwards on his own position: face, hands and the
+      // rifle in them all come out of his back. That is what made a squadmate
+      // look like he was holding his weapon across himself.
+      tmpEuler.set(0, r.yaw + Math.PI, 0);
       tmpQuat.setFromEuler(tmpEuler);
 
       // Badly hurt soaks the uniform toward blood, so you can see who needs

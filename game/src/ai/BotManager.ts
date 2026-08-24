@@ -6,6 +6,7 @@ import {
   Bot, BotState, Joint, JOINTS, MAX_TUNNEL, BOT_PARTS, CORPSE_LIFE, CORPSE_SINK,
   findStandingY, blockingVoxel,
 } from './Bot';
+import type { BotTarget } from './Bot';
 import { BotKind, BotRole, type BotDef } from './botTypes';
 import { SquadManager, CONTACT_MEMORY } from './Squad';
 import {
@@ -110,6 +111,20 @@ const SUBMERGE_TIME = 0.65;
 const SURFACE_DWELL = 7;
 /** Bursts it gets away on one trip up. */
 const BURSTS_PER_TRIP = 2;
+/**
+ * How often a bot reconsiders which man it is trying to kill.
+ *
+ * Not every frame: a bot standing between two players would spend the fight
+ * turning from one to the other instead of shooting either.
+ */
+const RETARGET_INTERVAL = 1.5;
+/**
+ * How much nearer a new man has to be before a bot swaps onto him, as a
+ * fraction of the range to the one it already has. The margin is the whole
+ * point — without it two players walking abreast make the horde oscillate.
+ */
+const RETARGET_HYSTERESIS = 0.75;
+
 /** Longest a rat will look for somewhere worth surfacing before settling. */
 const BURROW_PATIENCE = 22;
 
@@ -127,22 +142,27 @@ export interface BotImpact {
   force: number;
 }
 
+// Re-exported so callers wiring up a horde only need this module.
+export type { BotTarget };
+
 export interface BotWorldContext {
   world: VoxelWorld;
   nav: NavGrid;
-  playerPos: THREE.Vector3;
-  playerVel: THREE.Vector3;
-  playerEyeY: number;
-  playerAlive: boolean;
+  /**
+   * Everyone the horde is willing to kill, live.
+   *
+   * A list rather than a single player because a co-op squad is several men
+   * standing in different places: each bot picks its own out of this, so a
+   * player off on a flank draws the men nearest him instead of being ignored
+   * by a wave that has all decided to walk at somebody else. Single-player
+   * passes a list of one and behaves exactly as it always did.
+   *
+   * Held by reference — the owner mutates the entries in place — and may be
+   * empty, which is how "nobody left alive" reaches the AI.
+   */
+  targets: BotTarget[];
   /** Where bots head when they have no contact. */
   objective: THREE.Vector3;
-  /**
-   * How readable the player is right now — 1 is a man walking upright in the
-   * open, less is crouched/still/sneaking, more is sprinting or shooting. Every
-   * bot's spot rate is multiplied by it, so the whole stealth system has one
-   * dial. Optional: leave it out and the horde behaves as it always did.
-   */
-  playerVisibility?: number;
   /** Bot wants to shoot at the given world point. */
   onFire: (bot: Bot, tx: number, ty: number, tz: number) => void;
   /** Bot is tearing at a voxel. */
@@ -480,8 +500,9 @@ export class BotManager {
    */
   private enterGround(bot: Bot): void {
     const tunnels = this.ctx.tunnels;
-    const px = this.ctx.playerPos.x;
-    const pz = this.ctx.playerPos.z;
+    const mark = bot.target ?? this.nearestTarget(bot) ?? null;
+    const px = mark !== null ? mark.pos.x : this.ctx.objective.x;
+    const pz = mark !== null ? mark.pos.z : this.ctx.objective.z;
 
     // Somewhere out in the network, back from the target but within a trip the
     // gallery speed can actually make — a rat that enters the ground eighty
@@ -533,9 +554,12 @@ export class BotManager {
       bot.wound(impact.x, impact.y, impact.z, 0.4 + Math.min(0.5, amount / 90) + (fatal ? 0.5 : 0));
     }
 
-    const ctx = this.ctx;
-    if (ctx.playerAlive && bot.squad !== null && !bot.squad.hasContact) {
-      bot.squad.report(ctx.playerPos.x, ctx.playerEyeY, ctx.playerPos.z);
+    // A bot shot from behind still knows roughly where it came from, and the
+    // man it was fighting is the best guess it has. One that had nobody yet
+    // takes the nearest, which is the same guess the horde used to make.
+    const seen = bot.target ?? this.nearestTarget(bot);
+    if (seen !== null && seen.alive && bot.squad !== null && !bot.squad.hasContact) {
+      bot.squad.report(seen.pos.x, seen.eyeY, seen.pos.z);
       // Second-hand intel, so don't let it masquerade as a live sighting.
       bot.squad.contactAge = CONTACT_MEMORY * 0.5;
     }
@@ -558,7 +582,7 @@ export class BotManager {
       this.ctx.onDeath(bot);
       return true;
     }
-    ctx.onVoice(bot, VoiceCue.Hurt);
+    this.ctx.onVoice(bot, VoiceCue.Hurt);
     return false;
   }
 
@@ -704,10 +728,6 @@ export class BotManager {
     this.tickCursor = (this.tickCursor + 1) % SIGHT_STRIDE;
     this.computeSeparation();
 
-    const px = ctx.playerPos.x;
-    const py = ctx.playerEyeY;
-    const pz = ctx.playerPos.z;
-
     for (let i = 0; i < this.bots.length; i++) {
       const bot = this.bots[i];
       if (!bot.active) continue;
@@ -749,6 +769,15 @@ export class BotManager {
       const wasZ = bot.position.z;
 
       if (!bot.burrowing) bot.surfaceTime += dt;
+
+      // Who this man is fighting is his own decision, so the whole tick below
+      // — what he can see, where he moves, what he shoots at — runs against
+      // his target rather than against a single player the horde shares.
+      this.retarget(bot, dt);
+      const t = bot.target;
+      const px = t !== null ? t.pos.x : ctx.objective.x;
+      const py = t !== null ? t.eyeY : ctx.objective.y;
+      const pz = t !== null ? t.pos.z : ctx.objective.z;
 
       this.perceive(bot, dt, i, px, py, pz);
       this.decide(bot);
@@ -805,6 +834,72 @@ export class BotManager {
   }
 
   // -------------------------------------------------------------------------
+  // Target selection
+  // -------------------------------------------------------------------------
+  /**
+   * Nearest living man to this bot, by ground distance.
+   *
+   * Ground distance and not "closest to the objective": the question a
+   * rifleman actually answers is which of them he can reach, and ranking by
+   * the base would put the whole horde onto one player again the moment
+   * somebody stepped inside the wire.
+   */
+  private nearestTarget(bot: Bot): BotTarget | null {
+    let best: BotTarget | null = null;
+    let bestDist = Infinity;
+    for (const t of this.ctx.targets) {
+      if (!t.alive) continue;
+      const dx = t.pos.x - bot.position.x;
+      const dz = t.pos.z - bot.position.z;
+      const d = dx * dx + dz * dz;
+      if (d >= bestDist) continue;
+      bestDist = d;
+      best = t;
+    }
+    return best;
+  }
+
+  /**
+   * Settles who this bot is fighting.
+   *
+   * Three rules, in order. A man who is dead or gone stops being a target
+   * immediately, whatever the clock says. A bot with eyes on someone keeps
+   * him -- the problem in front of you is the problem, and a horde that
+   * re-optimises mid-firefight reads as broken rather than as clever. Failing
+   * both, it takes the nearest, but only if that man is enough nearer than the
+   * one it already had to be worth turning around for.
+   */
+  private retarget(bot: Bot, dt: number): void {
+    bot.retargetTimer -= dt;
+
+    let cur = bot.target;
+    if (cur !== null && (!cur.alive || this.ctx.targets.indexOf(cur) < 0)) {
+      cur = bot.target = null;
+      bot.retargetTimer = 0;
+    }
+    if (cur !== null && bot.retargetTimer > 0) return;
+    // Staggered, so a wave doesn't re-decide in lockstep.
+    bot.retargetTimer = RETARGET_INTERVAL * (0.7 + this.rand() * 0.6);
+    if (cur !== null && bot.seesTarget) return;
+
+    const best = this.nearestTarget(bot);
+    if (best === null || cur === null) {
+      bot.target = best;
+      return;
+    }
+    if (best === cur) return;
+
+    const bdx = best.pos.x - bot.position.x;
+    const bdz = best.pos.z - bot.position.z;
+    const cdx = cur.pos.x - bot.position.x;
+    const cdz = cur.pos.z - bot.position.z;
+    const bestDist = bdx * bdx + bdz * bdz;
+    const curDist = cdx * cdx + cdz * cdz;
+    // Squared throughout, so the margin is squared with it.
+    if (bestDist < curDist * RETARGET_HYSTERESIS * RETARGET_HYSTERESIS) bot.target = best;
+  }
+
+  // -------------------------------------------------------------------------
   // Perception
   // -------------------------------------------------------------------------
   private perceive(bot: Bot, dt: number, index: number, px: number, py: number, pz: number): void {
@@ -817,7 +912,8 @@ export class BotManager {
     const hiding = bot.inCover && bot.crouch > 0.5 && !bot.peeking;
     if (!hiding) bot.sightAge += dt;
 
-    if (!ctx.playerAlive) {
+    const target = bot.target;
+    if (target === null || !target.alive) {
       this.forget(bot, dt);
       return;
     }
@@ -874,7 +970,7 @@ export class BotManager {
     // him where to look.
     const squad = bot.squad;
     const told = squad !== null && squad.hasContact ? SQUAD_CONTACT_SCALE : 1;
-    const vis = ctx.playerVisibility ?? 1;
+    const vis = target.visibility ?? 1;
     bot.awareness = Math.min(1, bot.awareness + SPOT_RATE * vis * rangeFactor(dist) * told * dt);
 
     if (bot.awareness < 1) {
@@ -1693,8 +1789,9 @@ export class BotManager {
     // man's eyes will be a second later.
     const world = this.ctx.world;
     const eye = bot.def.height * 0.82;
+    const targetEyeY = bot.target !== null ? bot.target.eyeY : this.ctx.objective.y;
     const sees = (hx: number, hy: number, hz: number): boolean => hasLineOfSight(
-      world, hx, hy + eye, hz, px, this.ctx.playerEyeY, pz,
+      world, hx, hy + eye, hz, px, targetEyeY, pz,
     );
 
     // First choice is a mouth already in the network that has a line to the
@@ -2391,8 +2488,14 @@ export class BotManager {
     if (speed > 0) {
       const flight = Math.hypot(tx - bot.position.x, tz - bot.position.z) / speed;
       const skill = def.accuracy;
-      tx += this.ctx.playerVel.x * flight * skill;
-      tz += this.ctx.playerVel.z * flight * skill;
+      // Lead whoever is actually on the end of this shot. A bot firing at a
+      // squad's last-seen mark has no velocity to lead, and shouldn't borrow
+      // somebody else's.
+      const lead = bot.seesTarget ? bot.target : null;
+      if (lead !== null) {
+        tx += lead.vel.x * flight * skill;
+        tz += lead.vel.z * flight * skill;
+      }
     }
 
     if (!bot.aimValid) {

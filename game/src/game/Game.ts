@@ -30,7 +30,7 @@ import { ViewModel } from '../player/ViewModel';
 import { WeaponId, HitZone, EXPLOSIONS, type ExplosionKind } from '../weapons/definitions';
 import { type WeaponState } from '../weapons/WeaponState';
 import { ProjectileSystem, ProjectileKind } from '../weapons/Projectiles';
-import { BotManager, type BotImpact } from '../ai/BotManager';
+import { BotManager, type BotImpact, type BotTarget } from '../ai/BotManager';
 import { Bot, BotState, CORPSE_LIFE } from '../ai/Bot';
 import { BotKind } from '../ai/botTypes';
 import { NavGrid } from '../ai/NavGrid';
@@ -169,6 +169,18 @@ export class Game {
   readonly world = new VoxelWorld();
   readonly chunks: ChunkManager;
   readonly player: Player;
+  /**
+   * The player, as the horde sees him.
+   *
+   * `BotManager` hunts a list of these rather than one hard-wired player,
+   * because a server room has a squad to choose between. Single-player is the
+   * degenerate case: one entry, pointing at the live position and velocity
+   * vectors, with the mutable fields refreshed each frame.
+   */
+  private readonly botTarget: BotTarget = {
+    id: '', pos: new THREE.Vector3(), vel: new THREE.Vector3(),
+    eyeY: 0, alive: true, visibility: 1,
+  };
   readonly loadout = new Loadout();
   readonly economy = new Economy();
   readonly audio = new AudioEngine();
@@ -302,6 +314,9 @@ export class Game {
     this.scene.add(this.sun.group);
 
     this.player = new Player(this.world);
+    // Held by reference: the horde reads the same vectors the player moves.
+    this.botTarget.pos = this.player.position;
+    this.botTarget.vel = this.player.velocity;
     this.chunks = new ChunkManager(this.world);
     this.scene.add(this.chunks.group);
 
@@ -422,10 +437,10 @@ export class Game {
     this.bots = new BotManager({
       world: this.world,
       nav: this.nav,
-      playerPos: this.player.position,
-      playerVel: this.player.velocity,
-      playerEyeY: 0,
-      playerAlive: true,
+      // One man, because single-player is one man. The horde reads this list
+      // the same way a server room's does; it just never has more than the
+      // one entry in it.
+      targets: [this.botTarget],
       objective: new THREE.Vector3(this.layout.baseCenter.x, this.layout.baseCenter.y, this.layout.baseCenter.z),
       onFire: (bot, tx, ty, tz) => this.botFire(bot, tx, ty, tz),
       onBreach: (bot, x, y, z) => this.botBreach(bot, x, y, z),
@@ -437,9 +452,6 @@ export class Game {
       onVoice: (bot, cue) => this.botVoice(bot, cue),
       tunnels: this.tunnels,
       aggression: 0,
-      // Rewritten every frame by updateStealth. One is a man walking upright
-      // in the open; everything the player can do about being seen moves it.
-      playerVisibility: 1,
     });
     this.scene.add(this.bots.mesh);
     this.garrison = new Garrison(this.bots);
@@ -1030,8 +1042,7 @@ export class Game {
     this.sinceFired += dt;
 
     const p = this.player;
-    const ctx = (this.bots as unknown as { ctx: { playerVisibility?: number } }).ctx;
-    ctx.playerVisibility = visibilityOf({
+    this.botTarget.visibility = visibilityOf({
       speed: Math.hypot(p.velocity.x, p.velocity.z) * PHYS.velocityScale,
       sprinting: p.sprinting,
       crouching: p.crouching,
@@ -1106,12 +1117,10 @@ export class Game {
     this.aggression.update(dt);
     this.updateHunters(dt);
 
-    // Keep the bot context in sync with the player.
-    const ctx = (this.bots as unknown as {
-      ctx: { playerEyeY: number; playerAlive: boolean; aggression: number };
-    }).ctx;
-    ctx.playerEyeY = this.player.eyeY;
-    ctx.playerAlive = this.player.alive && this.player.invulnerable <= 0;
+    // Keep what the horde is hunting in sync with the player.
+    this.botTarget.eyeY = this.player.eyeY;
+    this.botTarget.alive = this.player.alive && this.player.invulnerable <= 0;
+    const ctx = (this.bots as unknown as { ctx: { aggression: number } }).ctx;
     ctx.aggression = this.aggression.value;
 
     // The flow field is seeded on both objectives, so bots route at whichever of
